@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>loomAI Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f1117; --card: #1a1d27; --border: #2a2d3e;
+      --text: #e2e8f0; --muted: #64748b;
+      --teal: #14b8a6; --amber: #f59e0b;
+      --red: #ef4444; --green: #22c55e; --purple: #a78bfa;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: 'Cascadia Code', 'JetBrains Mono', monospace;
+      font-size: 14px; padding: 1.5rem;
+    }
+    header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 1.5rem;
+    }
+    h1 { color: var(--teal); font-size: 1.1rem;
+         letter-spacing: .08em; text-transform: uppercase; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;
+            margin-bottom: 1rem; }
+    .card { background: var(--card); border: 1px solid var(--border);
+            border-radius: 8px; padding: 1rem; }
+    .card h2 { font-size: .72rem; color: var(--muted);
+               text-transform: uppercase; letter-spacing: .1em;
+               margin-bottom: .75rem; }
+    .agent { display: flex; align-items: flex-start; gap: .6rem;
+             padding: .5rem 0; border-bottom: 1px solid var(--border); }
+    .agent:last-child { border-bottom: none; }
+    .dot { width: 8px; height: 8px; border-radius: 50%;
+           background: var(--muted); margin-top: 5px; flex-shrink: 0;
+           transition: background .3s; }
+    .dot.active { background: var(--teal);
+                  box-shadow: 0 0 6px var(--teal); }
+    .dot.waiting { background: var(--amber);
+                   box-shadow: 0 0 6px var(--amber); }
+    .agent-name { color: var(--purple); font-weight: 600; font-size: .8rem; }
+    .agent-msg  { color: var(--muted); font-size: .78rem; margin-top: .2rem;
+                  line-height: 1.4; }
+    .status-row { display: flex; gap: .5rem; align-items: center;
+                  padding: .3rem 0; font-size: .78rem; }
+    .badge { padding: .15rem .5rem; border-radius: 4px; font-size: .68rem;
+             text-transform: uppercase; letter-spacing: .05em; flex-shrink: 0; }
+    .badge-ok   { background: #14402a; color: var(--green); }
+    .badge-warn { background: #2d2a10; color: var(--amber); }
+    .badge-err  { background: #2d1515; color: var(--red); }
+
+    /* Decision Banner */
+    #decision-banner {
+      display: none; margin-bottom: 1rem;
+      background: #1e1010; border: 1px solid var(--red);
+      border-radius: 8px; padding: 1rem;
+      animation: pulse-border 1.5s ease-in-out infinite;
+    }
+    #decision-banner.visible { display: block; }
+    @keyframes pulse-border {
+      0%, 100% { border-color: var(--red); }
+      50%       { border-color: #7f1d1d; }
+    }
+    #decision-banner h3 {
+      color: var(--red); font-size: .75rem;
+      text-transform: uppercase; letter-spacing: .1em;
+      margin-bottom: .5rem;
+    }
+    #decision-text { color: var(--text); margin-bottom: .75rem;
+                     font-size: .85rem; line-height: 1.5; }
+    .btn { border: none; border-radius: 5px; padding: .4rem 1rem;
+           font-family: inherit; font-size: .8rem; cursor: pointer;
+           transition: opacity .15s; font-weight: 600; }
+    .btn:hover { opacity: .75; }
+    .btn-green { background: var(--green); color: #000; }
+    .btn-red   { background: var(--red);   color: #fff; }
+
+    /* Log */
+    #log { height: 260px; overflow-y: auto; font-size: .76rem; }
+    #log::-webkit-scrollbar { width: 4px; }
+    #log::-webkit-scrollbar-track { background: var(--card); }
+    #log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .log-line { padding: .25rem 0; border-bottom: 1px solid #1e2130;
+                display: flex; gap: .6rem; line-height: 1.4; }
+    .log-ts    { color: var(--muted); flex-shrink: 0; font-size: .7rem;
+                 padding-top: .05rem; }
+    .log-agent { flex-shrink: 0; min-width: 72px; font-weight: 600;
+                 font-size: .74rem; }
+    .log-msg   { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>▸ loomAI Dashboard</h1>
+  <div style="display:flex;gap:.5rem;align-items:center">
+    <span id="sse-dot" class="dot"></span>
+    <span id="sse-label" style="font-size:.75rem;color:var(--muted)">
+      Verbinde...
+    </span>
+  </div>
+</header>
+
+<!-- Decision Banner (Hard Stop) -->
+<div id="decision-banner">
+  <h3>⚠ Entscheidung erforderlich — Agent wartet</h3>
+  <div id="decision-text"></div>
+  <div style="margin-top:.75rem;display:flex;gap:.5rem">
+    <button class="btn btn-green" onclick="sendDecision('allow')">
+      ✓ Erlauben
+    </button>
+    <button class="btn btn-red" onclick="sendDecision('deny')">
+      ✗ Ablehnen
+    </button>
+  </div>
+</div>
+
+<div class="grid">
+  <!-- Agenten-Status -->
+  <div class="card">
+    <h2>Agenten</h2>
+    <div class="agent">
+      <div class="dot" id="dot-Planer"></div>
+      <div>
+        <div class="agent-name">Planer</div>
+        <div class="agent-msg" id="msg-Planer">—</div>
+      </div>
+    </div>
+    <div class="agent">
+      <div class="dot" id="dot-Executor"></div>
+      <div>
+        <div class="agent-name">Executor</div>
+        <div class="agent-msg" id="msg-Executor">—</div>
+      </div>
+    </div>
+    <div class="agent">
+      <div class="dot" id="dot-human"></div>
+      <div>
+        <div class="agent-name">Human</div>
+        <div class="agent-msg" id="msg-human">Bereit</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- System-Status -->
+  <div class="card">
+    <h2>System</h2>
+    <div class="status-row">
+      <span class="badge badge-ok">SSE</span>
+      <span id="sse-status" style="color:var(--muted)">Verbinde...</span>
+    </div>
+    <div class="status-row">
+      <span class="badge badge-ok">Podman</span>
+      <span style="color:var(--muted)">rootless · WSL2</span>
+    </div>
+    <div class="status-row">
+      <span class="badge badge-warn">Model</span>
+      <span style="color:var(--muted)">simulation (LLM folgt)</span>
+    </div>
+    <div class="status-row">
+      <span class="badge badge-ok">GPU</span>
+      <span style="color:var(--muted)">RTX 4070 Super · CUDA 13</span>
+    </div>
+  </div>
+</div>
+
+<!-- Live-Log -->
+<div class="card">
+  <h2>Live-Log</h2>
+  <div id="log"></div>
+</div>
+
+<script>
+  let currentDecisionTs = null;
+
+  const COLORS = {
+    Planer:   'var(--purple)',
+    Executor: 'var(--teal)',
+    human:    'var(--green)',
+    SYSTEM:   'var(--amber)',
+  };
+
+  function ts() {
+    return new Date().toLocaleTimeString('de-AT', { hour12: false });
+  }
+
+  function appendLog(agent, message, color) {
+    const log = document.getElementById('log');
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    const c = color || COLORS[agent] || 'var(--purple)';
+    line.innerHTML =
+      `<span class="log-ts">${ts()}</span>` +
+      `<span class="log-agent" style="color:${c}">${agent}</span>` +
+      `<span class="log-msg">${message}</span>`;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function setAgent(name, message, dotClass) {
+    const dot = document.getElementById('dot-' + name);
+    const msg = document.getElementById('msg-' + name);
+    if (dot) dot.className = 'dot ' + (dotClass || 'active');
+    if (msg) msg.textContent = message;
+  }
+
+  function handleEvent(ev) {
+    if (ev.type === 'agent_status') {
+      setAgent(ev.agent, ev.message, 'active');
+      appendLog(ev.agent, ev.message);
+    }
+
+    if (ev.type === 'decision_point') {
+      currentDecisionTs = ev.ts;
+      document.getElementById('decision-text').textContent = ev.message;
+      document.getElementById('decision-banner').classList.add('visible');
+      setAgent(ev.agent, '⏸ Warte auf Entscheidung...', 'waiting');
+      appendLog('SYSTEM', '⚠ Decision Point: ' + ev.message, 'var(--red)');
+    }
+
+    if (ev.type === 'decision_answer') {
+      document.getElementById('decision-banner').classList.remove('visible');
+      setAgent('human', ev.message, 'active');
+      appendLog('human', ev.message);
+    }
+  }
+
+  function sendDecision(answer) {
+    fetch('/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: currentDecisionTs, answer })
+    }).catch(console.error);
+    document.getElementById('decision-banner').classList.remove('visible');
+    appendLog('human', 'Entscheidung gesendet: ' + answer, 'var(--green)');
+  }
+
+  // SSE-Verbindung
+  const sseDot   = document.getElementById('sse-dot');
+  const sseLabel = document.getElementById('sse-label');
+  const sseStatus = document.getElementById('sse-status');
+
+  const sse = new EventSource('/events');
+
+  sse.onopen = () => {
+    sseDot.className = 'dot active';
+    sseLabel.textContent = 'Verbunden';
+    sseLabel.style.color = 'var(--green)';
+    sseStatus.textContent = 'Verbunden';
+    sseStatus.style.color = 'var(--green)';
+    appendLog('SYSTEM', 'Dashboard verbunden mit loomAI', 'var(--teal)');
+  };
+
+  sse.onmessage = (e) => {
+    try { handleEvent(JSON.parse(e.data)); } catch (_) {}
+  };
+
+  sse.onerror = () => {
+    sseDot.className = 'dot';
+    sseLabel.textContent = 'Getrennt – reconnecting...';
+    sseLabel.style.color = 'var(--red)';
+    sseStatus.textContent = 'Getrennt';
+    sseStatus.style.color = 'var(--red)';
+  };
+</script>
+</body>
+</html>
