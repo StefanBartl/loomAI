@@ -168,6 +168,3 @@ body, Gemini builds the path directly from the model name
   hardcoded in `main.cpp`'s router, no configuration option for
   custom/future prefixes -- no need for that so far, since all three
   providers prefix their model names stably this way.
-- `main.cpp`'s `svr.listen()` return value isn't checked -- a bind failure
-  (e.g. the port already in use) currently disappears silently instead of
-  producing an error/log entry.

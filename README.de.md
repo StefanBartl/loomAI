@@ -168,6 +168,3 @@ verschicken, baut Gemini den Pfad direkt aus dem Modellnamen
   hartkodiert in `main.cpp`s Router, keine Konfigurationsmöglichkeit für
   eigene/zukünftige Präfixe -- bislang kein Bedarf, da alle drei Anbieter
   ihre Modellnamen stabil so präfixieren.
-- `main.cpp`s `svr.listen()`-Rückgabewert wird nicht geprüft -- ein
-  Bind-Fehler (z. B. Port bereits belegt) verschwindet aktuell still statt
-  einen Fehler/Log-Eintrag zu erzeugen.
