@@ -77,6 +77,31 @@
     .btn-green { background: var(--green); color: #000; }
     .btn-red   { background: var(--red);   color: #fff; }
 
+    /* Ask panel */
+    #ask-prompt {
+      width: 100%; min-height: 70px; resize: vertical;
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: .6rem; font-family: inherit; font-size: .82rem;
+    }
+    .ask-row { display: flex; gap: .5rem; align-items: center;
+               margin-top: .6rem; flex-wrap: wrap; }
+    #ask-model {
+      flex: 1; min-width: 200px;
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: .45rem .6rem; font-family: inherit; font-size: .78rem;
+    }
+    .btn-teal  { background: var(--teal); color: #000; }
+    .btn-muted { background: var(--border); color: var(--text); }
+    .btn:disabled { opacity: .4; cursor: default; }
+    #ask-hint { font-size: .68rem; color: var(--muted); margin-top: .4rem; }
+    #ask-status { font-size: .74rem; color: var(--muted); margin-top: .5rem; }
+    #ask-output {
+      margin-top: .5rem; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: .75rem; min-height: 60px; max-height: 340px;
+      overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+      font-size: .82rem; line-height: 1.55;
+    }
+
     /* Log */
     #log { height: 260px; overflow-y: auto; font-size: .76rem; }
     #log::-webkit-scrollbar { width: 4px; }
@@ -156,14 +181,40 @@
       <span style="color:var(--muted)">rootless · WSL2</span>
     </div>
     <div class="status-row">
-      <span class="badge badge-warn">Model</span>
-      <span style="color:var(--muted)">simulation (LLM folgt)</span>
+      <span class="badge badge-ok">Backends</span>
+      <span id="backends-status" style="color:var(--muted)">lädt...</span>
     </div>
     <div class="status-row">
       <span class="badge badge-ok">GPU</span>
       <span style="color:var(--muted)">RTX 4070 Super · CUDA 13</span>
     </div>
   </div>
+</div>
+
+<!-- Ask/Chat-Testpanel: manuelles Testen von /ask/stream gegen jedes
+     ModelRouter-Backend, ohne curl oder ai.nvim zu brauchen. -->
+<div class="card">
+  <h2>Ask</h2>
+  <textarea id="ask-prompt" placeholder="Prompt eingeben..."></textarea>
+  <div class="ask-row">
+    <input id="ask-model" list="ask-model-presets"
+           placeholder="Modell (leer = Ollama-Standard)">
+    <datalist id="ask-model-presets">
+      <option value="gpt-4o-mini">
+      <option value="claude-3-5-haiku-20241022">
+      <option value="gemini-2.5-flash">
+      <option value="llama3.1:8b-q5_K_M">
+    </datalist>
+    <button class="btn btn-teal" id="ask-send" onclick="sendAsk()">▸ Senden</button>
+    <button class="btn btn-muted" id="ask-stop" onclick="stopAsk()" disabled>■ Stopp</button>
+  </div>
+  <div id="ask-hint">
+    Modellname-Präfix entscheidet das Backend: <code>gpt-</code>/<code>o1-</code>/<code>o3-</code>
+    → OpenAI, <code>claude-</code> → Anthropic, <code>gemini-</code> → Gemini,
+    sonst/leer → lokales Ollama.
+  </div>
+  <div id="ask-status"></div>
+  <div id="ask-output"></div>
 </div>
 
 <!-- Live-Log -->
@@ -235,6 +286,125 @@
     }).catch(console.error);
     document.getElementById('decision-banner').classList.remove('visible');
     appendLog('human', 'Entscheidung gesendet: ' + answer, 'var(--green)');
+  }
+
+  // Backend-Status (ersetzt die frühere fest eingetragene "Model:
+  // simulation"-Zeile, die seit /ask/-stream echt sind irreführend war).
+  fetch('/health')
+    .then((r) => r.json())
+    .then((data) => {
+      const names = { ollama: 'Ollama', openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini' };
+      const backends = data.backends || {};
+      const parts = Object.keys(names).map((id) => {
+        const ok = !!backends[id];
+        const color = ok ? 'var(--green)' : 'var(--muted)';
+        return `<span style="color:${color}">${names[id]} ${ok ? '✓' : '✗'}</span>`;
+      });
+      document.getElementById('backends-status').innerHTML = parts.join('&nbsp;&nbsp;');
+    })
+    .catch(() => {
+      document.getElementById('backends-status').textContent = 'nicht erreichbar';
+    });
+
+  // Ask/Chat-Testpanel: POST /ask/stream + manuelles SSE-Line-Parsing.
+  // EventSource kann keinen POST-Body schicken, daher fetch() +
+  // response.body.getReader() -- gleiches "data: <json>\n\n"-Format wie
+  // ai.nvim's providers/sse.lua, nur hier in JS statt Lua nachgebaut.
+  let askAbort = null;
+
+  function setAskBusy(busy) {
+    document.getElementById('ask-send').disabled = busy;
+    document.getElementById('ask-stop').disabled = !busy;
+  }
+
+  async function sendAsk() {
+    const prompt = document.getElementById('ask-prompt').value.trim();
+    if (!prompt) return;
+
+    const model = document.getElementById('ask-model').value.trim();
+    const output = document.getElementById('ask-output');
+    const status = document.getElementById('ask-status');
+
+    output.textContent = '';
+    status.textContent = 'Sende Anfrage...';
+    status.style.color = 'var(--muted)';
+    setAskBusy(true);
+
+    askAbort = new AbortController();
+
+    try {
+      const res = await fetch('/ask/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(model ? { prompt, model } : { prompt }),
+        signal: askAbort.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        status.textContent = 'Fehler: HTTP ' + res.status;
+        status.style.color = 'var(--red)';
+        setAskBusy(false);
+        return;
+      }
+
+      status.textContent = 'Streaming...';
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let gotError = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let nl;
+        while ((nl = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, nl).replace(/\r$/, '');
+          buffer = buffer.slice(nl + 1);
+          if (!line.startsWith('data:')) continue;
+
+          const payload = line.slice(5).trim();
+          if (payload === '' || payload === '[DONE]') continue;
+
+          let obj;
+          try {
+            obj = JSON.parse(payload);
+          } catch (_) {
+            continue;
+          }
+
+          if (obj.error) {
+            gotError = true;
+            const msg = (obj.error && obj.error.message) || obj.error;
+            status.textContent = 'Fehler: ' + msg;
+            status.style.color = 'var(--red)';
+          } else if (typeof obj.delta === 'string') {
+            output.textContent += obj.delta;
+            output.scrollTop = output.scrollHeight;
+          }
+        }
+      }
+
+      if (!gotError) {
+        status.textContent = 'Fertig.';
+        status.style.color = 'var(--green)';
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        status.textContent = 'Abgebrochen.';
+      } else {
+        status.textContent = 'Fehler: ' + err.message;
+        status.style.color = 'var(--red)';
+      }
+    } finally {
+      setAskBusy(false);
+      askAbort = null;
+    }
+  }
+
+  function stopAsk() {
+    if (askAbort) askAbort.abort();
   }
 
   // SSE-Verbindung
