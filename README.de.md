@@ -158,9 +158,16 @@ verschicken, baut Gemini den Pfad direkt aus dem Modellnamen
 
 ## Stand / was fehlt
 
-- Kein Auth/API-Key für den Server selbst nötig, solange er nur auf
-  `127.0.0.1` hört (die drei Cloud-*Backends* brauchen natürlich ihre
-  eigenen Keys, s. o.).
+- Kein Auth/API-Key für den Server selbst nötig. Das reine Binden auf
+  `127.0.0.1` verhindert aber nicht, dass eine im selben Browser offene
+  Webseite Requests dagegen schickt — deshalb wird zusätzlich jeder
+  Request gegen seinen `Origin`-Header geprüft: ein Request mit fremdem
+  `Origin` wird mit `403` abgelehnt, bevor er einen Route-Handler erreicht
+  (diesen Header kann eine Webseite bei einem echten Cross-Origin-Request
+  weder fälschen noch weglassen). curl-basierte Clients (`ai.nvim`s
+  `loomai.lua`, reines `curl`) schicken gar keinen `Origin`-Header und sind
+  davon nicht betroffen; die drei Cloud-*Backends* brauchen natürlich
+  weiterhin ihre eigenen Keys, s. o.
 - `ollama_client.cpp` öffnet pro Request eine neue TCP-Verbindung zu Ollama
   statt sie wiederzuverwenden -- bekannt, bewusst zurückgestellt (bräuchte
   ein durchdachtes Pooling-Design), siehe `ai.nvim`-Handover.

@@ -100,6 +100,27 @@ void send_json_error(httplib::Response& res, int status, const std::string& mess
 }
 
 // ---------------------------------------------------------------------------
+// Cross-origin protection: the server binds 127.0.0.1 only, but that alone
+// does not stop an arbitrary web page open in the same browser from firing
+// fetch()/XHR requests at it -- a browser happily lets JS on any origin talk
+// to localhost, and (for POST bodies whose Content-Type doesn't trigger a
+// CORS preflight, e.g. "text/plain" carrying JSON-shaped text, which every
+// handler here parses regardless of the declared Content-Type) that request
+// still executes server-side even without a wildcard Access-Control-Allow-
+// Origin response header -- that header only controls whether the page can
+// *read* the response, not whether the request happens at all. A browser
+// cannot forge or suppress its own Origin header on a cross-origin request
+// though, so rejecting any request whose Origin doesn't match this server's
+// own origin closes that gap without requiring a shared secret on ai.nvim's
+// side: curl-based clients (ai.nvim's loomai.lua, plain `curl`) send no
+// Origin header at all and are unaffected, and the dashboard's own JS is
+// always same-origin.
+// ---------------------------------------------------------------------------
+bool is_allowed_origin(const std::string& origin) {
+    return origin == "http://127.0.0.1:8080" || origin == "http://localhost:8080";
+}
+
+// ---------------------------------------------------------------------------
 // Simulations-Agent (wird später durch echten LLM-Agent ersetzt)
 // ---------------------------------------------------------------------------
 void run_simulation_agent() {
@@ -152,6 +173,8 @@ int main() {
     std::cout << "Gemini:    "
                << (loomai::gemini::configured() ? "configured" : "not configured (GEMINI_API_KEY unset)")
                << "\n";
+    std::cout << "Herkunft:  Anfragen mit fremdem Origin-Header werden abgelehnt "
+                  "(schuetzt vor einer bösartigen Webseite im selben Browser)\n";
     std::cout << "Stoppen:   Ctrl+C\n\n";
 
     httplib::Server svr;
@@ -162,9 +185,21 @@ int main() {
         return 1;
     }
 
+    // Reject any request whose Origin header names a foreign page before it
+    // reaches a single route handler -- see is_allowed_origin()'s comment.
+    // A top-level navigation (loading the dashboard itself) and every
+    // non-browser client send no Origin header at all, so those still pass.
+    svr.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
+        std::string origin = req.get_header_value("Origin");
+        if (!origin.empty() && !is_allowed_origin(origin)) {
+            send_json_error(res, 403, "cross-origin request blocked");
+            return httplib::Server::HandlerResponse::Handled;
+        }
+        return httplib::Server::HandlerResponse::Unhandled;
+    });
+
     // SSE-Endpoint: Browser verbindet sich hier und empfängt live Events
     svr.Get("/events", [](const httplib::Request&, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", "*");
         res.set_header("Cache-Control", "no-cache");
         res.set_header("X-Accel-Buffering", "no");
 
@@ -212,7 +247,6 @@ int main() {
     // Health-Endpoint: billiger "läuft und kann annehmen"-Check für
     // ai.nvim/andere Clients (Aufgabe A)
     svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", "*");
         json body;
         body["status"] = "ready";
         body["model_router_ready"] = true;
@@ -234,8 +268,6 @@ int main() {
     // Anthropic/Gemini -- der HTTP-Kontrakt selbst ändert sich dadurch
     // nicht (kein neues Request-Feld nötig).
     svr.Post("/ask", [](const httplib::Request& req, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", "*");
-
         auto body = json::parse(req.body, nullptr, false);
         if (body.is_discarded() || !body.contains("prompt") ||
             !body["prompt"].is_string()) {
@@ -271,7 +303,6 @@ int main() {
     // einem JSON-Objekt pro "data:"-Zeile; Fehler mitten im Stream werden
     // als reguläres SSE-Event gesendet statt die Verbindung roh abzureißen.
     svr.Post("/ask/stream", [](const httplib::Request& req, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", "*");
         res.set_header("Cache-Control", "no-cache");
         res.set_header("X-Accel-Buffering", "no");
 

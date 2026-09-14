@@ -158,9 +158,15 @@ body, Gemini builds the path directly from the model name
 
 ## Status / what's missing
 
-- No auth/API key needed for the server itself, as long as it only
-  listens on `127.0.0.1` (the three cloud *backends* obviously need their
-  own keys, see above).
+- No auth/API key needed for the server itself. `127.0.0.1`-only binding
+  alone doesn't stop a web page open in the same browser from firing
+  requests at it though, so every request is additionally checked against
+  its `Origin` header: a request whose `Origin` names a foreign page is
+  rejected with `403` before it reaches any route handler (a browser
+  cannot forge or omit that header for a genuinely cross-origin request).
+  curl-based clients (`ai.nvim`'s `loomai.lua`, plain `curl`) send no
+  `Origin` header at all and are unaffected; the three cloud *backends*
+  obviously still need their own keys, see above.
 - `ollama_client.cpp` opens a new TCP connection to Ollama per request
   instead of reusing one -- known, deliberately deferred (would need a
   proper pooling design), see the `ai.nvim` handover.
