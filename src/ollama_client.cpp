@@ -16,6 +16,21 @@ std::string env_or(const char* name, const std::string& fallback) {
     return (value && *value) ? std::string(value) : fallback;
 }
 
+// Ollama's own error field is normally a plain string, but nothing
+// guarantees that -- LOOMAI_OLLAMA_HOST can point at any backend speaking
+// this same shape, and json::value<std::string>() throws a type_error if
+// "error" exists but isn't a string. That throw is fatal on the streaming
+// path (see ask_stream): it happens inside a response content-provider
+// callback, which runs outside cpp-httplib's request-routing try/catch, so
+// an uncaught exception there crashes the whole process, not just one
+// request. Never call .value("error", ...) directly; always go through this.
+std::string error_text(const json& error_value) {
+    if (error_value.is_string()) {
+        return error_value.get<std::string>();
+    }
+    return error_value.dump();
+}
+
 httplib::Client make_client(int timeout_ms) {
     httplib::Client cli(host());
     cli.set_connection_timeout(std::chrono::milliseconds(timeout_ms));
@@ -78,7 +93,7 @@ AskResult ask(const std::string& prompt,
         return result;
     }
     if (parsed.contains("error")) {
-        result.error_message = "ollama: " + parsed.value("error", "unknown error");
+        result.error_message = "ollama: " + error_text(parsed["error"]);
         return result;
     }
 
@@ -125,7 +140,7 @@ std::string ask_stream(const std::string& prompt,
             if (obj.is_discarded()) continue;
 
             if (obj.contains("error")) {
-                stream_error = "ollama: " + obj.value("error", "unknown error");
+                stream_error = "ollama: " + error_text(obj["error"]);
                 return false;
             }
 

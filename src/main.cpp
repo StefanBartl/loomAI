@@ -220,17 +220,30 @@ int main() {
                     sink.write(data.c_str(), data.size());
                 };
 
-                std::string err = loomai::ollama::ask_stream(
-                    prompt, system, model, timeout_ms,
-                    [&](const std::string& delta) {
-                        write_event(json{{"delta", delta}});
-                    });
+                // This callback runs outside cpp-httplib's own
+                // request-routing try/catch (it executes while the response
+                // body is being written, not while the handler above is
+                // being routed) -- an exception escaping it is not caught
+                // anywhere and crashes the whole process, not just this
+                // request. Everything below is defensive because of that,
+                // not because an exception is expected in the normal case.
+                try {
+                    std::string err = loomai::ollama::ask_stream(
+                        prompt, system, model, timeout_ms,
+                        [&](const std::string& delta) {
+                            write_event(json{{"delta", delta}});
+                        });
 
-                if (!err.empty()) {
-                    write_event(json{{"error", {{"message", err}}}});
-                } else {
-                    static const std::string done_event = "data: [DONE]\n\n";
-                    sink.write(done_event.c_str(), done_event.size());
+                    if (!err.empty()) {
+                        write_event(json{{"error", {{"message", err}}}});
+                    } else {
+                        static const std::string done_event = "data: [DONE]\n\n";
+                        sink.write(done_event.c_str(), done_event.size());
+                    }
+                } catch (const std::exception& e) {
+                    write_event(json{{"error", {{"message", std::string("loomai: ") + e.what()}}}});
+                } catch (...) {
+                    write_event(json{{"error", {{"message", "loomai: unknown internal error"}}}});
                 }
 
                 sink.done();
