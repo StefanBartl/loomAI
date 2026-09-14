@@ -330,10 +330,19 @@ int main() {
     // Simulations-Agent in eigenem Thread starten
     std::thread sim(run_simulation_agent);
 
-    // HTTP-Server blockiert hier (Ctrl+C beendet)
-    svr.listen("127.0.0.1", 8080);
+    // HTTP-Server blockiert hier (Ctrl+C beendet). listen() returns false on
+    // a bind failure (e.g. port already in use) instead of throwing -- an
+    // unchecked return here made the process exit silently with no
+    // indication why, which is exactly what happened during ModelRouter
+    // testing when a stray leftover instance still held the port.
+    bool listen_ok = svr.listen("127.0.0.1", 8080);
 
     running = false;
     sim.join();
+
+    if (!listen_ok) {
+        std::cerr << "loomai: failed to bind 127.0.0.1:8080 (port already in use?)\n";
+        return 1;
+    }
     return 0;
 }
