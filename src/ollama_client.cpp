@@ -11,6 +11,14 @@ using json = nlohmann::json;
 
 namespace {
 
+// A legitimate NDJSON chunk is at most a few KB -- this only guards against a
+// malformed/adversarial response that never sends a newline, which would
+// otherwise grow `buffer` in ask_stream()'s content_receiver without bound
+// for the life of the request. Mirrors gemini_client.cpp's kMaxLineBufferBytes.
+// Most relevant here since LOOMAI_OLLAMA_HOST is user-configurable and can
+// point at a non-local host, unlike the hardcoded cloud-provider hosts.
+constexpr size_t kMaxLineBufferBytes = 1 << 20;  // 1 MiB
+
 std::string env_or(const char* name, const std::string& fallback) {
     const char* value = std::getenv(name);
     return (value && *value) ? std::string(value) : fallback;
@@ -133,6 +141,11 @@ std::string ask_stream(const std::string& prompt,
             if (!chunk.empty()) {
                 on_delta(chunk);
             }
+        }
+        if (buffer.size() > kMaxLineBufferBytes) {
+            stream_error = "ollama: streaming response line exceeded " +
+                            std::to_string(kMaxLineBufferBytes) + " bytes without a newline";
+            return false;
         }
         return true;
     };

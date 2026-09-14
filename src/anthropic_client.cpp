@@ -13,6 +13,12 @@ namespace {
 constexpr const char* kApiVersion = "2023-06-01";
 constexpr int kMaxTokens = 4096;
 
+// A legitimate SSE chunk is at most a few KB -- this only guards against a
+// malformed/adversarial response that never sends a newline, which would
+// otherwise grow `buffer` in ask_stream()'s content_receiver without bound
+// for the life of the request. Mirrors gemini_client.cpp's kMaxLineBufferBytes.
+constexpr size_t kMaxLineBufferBytes = 1 << 20;  // 1 MiB
+
 std::string env_or(const char* name, const std::string& fallback) {
     const char* value = std::getenv(name);
     return (value && *value) ? std::string(value) : fallback;
@@ -180,6 +186,11 @@ std::string ask_stream(const std::string& prompt,
                 stream_error = "anthropic: " + error_text(err);
                 return false;
             }
+        }
+        if (buffer.size() > kMaxLineBufferBytes) {
+            stream_error = "anthropic: streaming response line exceeded " +
+                            std::to_string(kMaxLineBufferBytes) + " bytes without a newline";
+            return false;
         }
         return true;
     };
