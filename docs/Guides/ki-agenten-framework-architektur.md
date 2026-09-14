@@ -483,17 +483,20 @@ bool Orchestrator::rollback_to(SnapshotID target) {
 
 ### Phase 0: Foundation (Woche 1-2)
 
-- [ ] C++-Projekt-Skeleton (CMake, Catch2, clang-format)
+- [x] C++-Projekt-Skeleton (CMake; Catch2/clang-format noch offen) — `CMakeLists.txt`
 - [ ] SQLite-Integration für State-Storage
-- [ ] Einfacher SSE-Server (cpp-httplib) → `GET /events` gibt Test-Events aus
-- [ ] Basis-Dashboard HTML-Seite empfängt und zeigt Events
+- [x] Einfacher SSE-Server (cpp-httplib) → `GET /events` gibt Test-Events aus
+- [x] Basis-Dashboard HTML-Seite empfängt und zeigt Events
 
 ### Phase 1: Model Integration (Woche 3-4)
 
-- [ ] Ollama REST-Client in C++ (HTTP GET/POST via cpp-httplib)
+- [x] Ollama REST-Client in C++ (HTTP GET/POST via cpp-httplib) — `src/ollama_client.hpp/.cpp`
 - [ ] Anthropic API Client (streaming SSE-Antworten)
-- [ ] Model Router mit einfacher VRAM-Heuristik
-- [ ] Erster "Hello World" Agent: sendet Prompt, gibt Antwort zurück
+- [ ] Model Router mit einfacher VRAM-Heuristik (aktuell: fest Ollama, `model` per Request frei wählbar)
+- [x] Erster "Hello World" Agent: sendet Prompt, gibt Antwort zurück — `POST /ask`
+      (siehe [README.md](../../README.md) und `nvim/docs/ROADMAP/reports/
+      loomai-ai-nvim-integration.md`, Aufgabe B/C für den HTTP-Vertrag,
+      2026-09-14)
 
 ### Phase 2: Sandbox (Woche 5-6)
 
