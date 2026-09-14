@@ -332,6 +332,27 @@
 
     askAbort = new AbortController();
 
+    // A response streams one token (sometimes one character) per SSE event
+    // -- appending straight to textContent and re-reading scrollHeight on
+    // every single one forces a synchronous reflow per token. Coalesce
+    // deltas arriving within the same frame into one DOM write + scroll via
+    // requestAnimationFrame instead. Declared outside the try/finally below
+    // so the final flush in `finally` can still see them.
+    let pendingOutput = '';
+    let flushScheduled = false;
+    function flushOutput() {
+      flushScheduled = false;
+      if (!pendingOutput) return;
+      output.textContent += pendingOutput;
+      pendingOutput = '';
+      output.scrollTop = output.scrollHeight;
+    }
+    function scheduleFlush() {
+      if (flushScheduled) return;
+      flushScheduled = true;
+      requestAnimationFrame(flushOutput);
+    }
+
     try {
       const res = await fetch('/ask/stream', {
         method: 'POST',
@@ -380,8 +401,8 @@
             status.textContent = 'Fehler: ' + msg;
             status.style.color = 'var(--red)';
           } else if (typeof obj.delta === 'string') {
-            output.textContent += obj.delta;
-            output.scrollTop = output.scrollHeight;
+            pendingOutput += obj.delta;
+            scheduleFlush();
           }
         }
       }
@@ -398,6 +419,7 @@
         status.style.color = 'var(--red)';
       }
     } finally {
+      flushOutput();
       setAskBusy(false);
       askAbort = null;
     }
