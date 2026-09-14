@@ -1,5 +1,6 @@
 #include "gemini_client.hpp"
 
+#include <cctype>
 #include <cstdlib>
 
 #include "httplib.h"
@@ -9,6 +10,12 @@ namespace loomai::gemini {
 using json = nlohmann::json;
 
 namespace {
+
+// A legitimate SSE chunk (one JSON GenerateContentResponse) is at most a
+// few KB -- this only guards against a malformed/adversarial response that
+// never sends a newline, which would otherwise grow `buffer` in
+// ask_stream()'s content_receiver without bound for the life of the request.
+constexpr size_t kMaxLineBufferBytes = 1 << 20;  // 1 MiB
 
 std::string env_or(const char* name, const std::string& fallback) {
     const char* value = std::getenv(name);
@@ -24,6 +31,64 @@ httplib::Client make_client(int timeout_ms) {
     cli.set_connection_timeout(std::chrono::milliseconds(timeout_ms));
     cli.set_read_timeout(std::chrono::milliseconds(timeout_ms));
     return cli;
+}
+
+// Unlike OpenAI/Anthropic (`model` goes into the JSON body), Gemini has no
+// way to pass the model except as a URL path segment
+// ("/v1beta/models/<model>:generateContent"). cpp-httplib escapes `\r`/`\n`
+// in the path but not `/`, so an unchecked model coming straight from the
+// request body (see main.cpp's route_ask(), which only requires a
+// "gemini-" prefix) could redirect this authenticated request to an
+// arbitrary path on Google's host. Real model names are alphanumeric plus
+// `.`/`-`/`_`; anything else is rejected before it ever reaches the path.
+bool is_safe_model_name(const std::string& model) {
+    if (model.empty()) {
+        return false;
+    }
+    for (unsigned char c : model) {
+        if (!std::isalnum(c) && c != '.' && c != '-' && c != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Extract a numeric field defensively, the same reason error_text() exists:
+// nlohmann::json::value<long>() throws a type_error if the key is present
+// but not a number (e.g. a backend sends `null` on a metrics hiccup), and
+// unlike error_text's own case that isn't caught by cpp-httplib's routing
+// try/catch on the streaming content_receiver path, it still turns a
+// perfectly good response into a raw C++ exception message instead of the
+// clean "backend: ..." error text every other failure mode here produces.
+long json_long_or(const json& value, const std::string& key, long fallback) {
+    if (!value.is_object()) {
+        return fallback;
+    }
+    auto it = value.find(key);
+    if (it == value.end() || !it->is_number()) {
+        return fallback;
+    }
+    return it->is_number_float() ? static_cast<long>(it->get<double>()) : it->get<long>();
+}
+
+// Gemini reports a safety/policy block as a normal 200 response with a
+// promptFeedback.blockReason and no candidates at all -- there is no
+// "error" field, so candidate_text() alone would return {"", ""} and look
+// like an empty-but-successful answer instead of a blocked request. Mirrors
+// ai.nvim's gemini.lua prompt_block_reason().
+// Returns "" when the response was not blocked.
+std::string prompt_block_reason(const json& parsed) {
+    if (!parsed.contains("promptFeedback") || !parsed["promptFeedback"].is_object()) {
+        return "";
+    }
+    const auto& feedback = parsed["promptFeedback"];
+    if (!feedback.contains("blockReason") || !feedback["blockReason"].is_string()) {
+        return "";
+    }
+    if (!parsed.value("candidates", json::array()).empty()) {
+        return "";
+    }
+    return feedback["blockReason"].get<std::string>();
 }
 
 json build_body(const std::string& prompt, const std::string& system) {
@@ -70,6 +135,10 @@ AskResult ask(const std::string& prompt,
         result.error_message = "gemini: GEMINI_API_KEY not set";
         return result;
     }
+    if (!is_safe_model_name(model)) {
+        result.error_message = "gemini: invalid model name: " + model;
+        return result;
+    }
 
     auto cli = make_client(timeout_ms);
     httplib::Headers headers = {{"x-goog-api-key", key}};
@@ -92,6 +161,11 @@ AskResult ask(const std::string& prompt,
         result.error_message = "gemini: " + error_text(parsed["error"]);
         return result;
     }
+    auto block_reason = prompt_block_reason(parsed);
+    if (!block_reason.empty()) {
+        result.error_message = "gemini: prompt blocked (" + block_reason + ")";
+        return result;
+    }
     if (res->status != 200) {
         result.error_message = "gemini: HTTP " + std::to_string(res->status) + ": " + res->body;
         return result;
@@ -101,8 +175,8 @@ AskResult ask(const std::string& prompt,
     result.text = text;
     result.stop_reason = finish_reason;
     auto usage = parsed.value("usageMetadata", json::object());
-    result.prompt_tokens = usage.value("promptTokenCount", 0L);
-    result.completion_tokens = usage.value("candidatesTokenCount", 0L);
+    result.prompt_tokens = json_long_or(usage, "promptTokenCount", 0);
+    result.completion_tokens = json_long_or(usage, "candidatesTokenCount", 0);
     result.ok = true;
     return result;
 }
@@ -115,6 +189,9 @@ std::string ask_stream(const std::string& prompt,
     std::string key = api_key();
     if (key.empty()) {
         return "gemini: GEMINI_API_KEY not set";
+    }
+    if (!is_safe_model_name(model)) {
+        return "gemini: invalid model name: " + model;
     }
 
     auto cli = make_client(timeout_ms);
@@ -164,11 +241,21 @@ std::string ask_stream(const std::string& prompt,
                 stream_error = "gemini: " + error_text(obj["error"]);
                 return false;
             }
+            auto block_reason = prompt_block_reason(obj);
+            if (!block_reason.empty()) {
+                stream_error = "gemini: prompt blocked (" + block_reason + ")";
+                return false;
+            }
             auto [chunk, _] = candidate_text(obj);
             if (!chunk.empty()) {
                 got_content = true;
                 on_delta(chunk);
             }
+        }
+        if (buffer.size() > kMaxLineBufferBytes) {
+            stream_error = "gemini: streaming response line exceeded " +
+                            std::to_string(kMaxLineBufferBytes) + " bytes without a newline";
+            return false;
         }
         return true;
     };
@@ -195,6 +282,12 @@ std::string ask_stream(const std::string& prompt,
         auto recovered = recover_error_body(non_data_lines);
         if (recovered && recovered->contains("error")) {
             return "gemini: " + error_text((*recovered)["error"]);
+        }
+        if (recovered) {
+            auto recovered_block_reason = prompt_block_reason(*recovered);
+            if (!recovered_block_reason.empty()) {
+                return "gemini: prompt blocked (" + recovered_block_reason + ")";
+            }
         }
         if (res->status != 200) {
             return "gemini: HTTP " + std::to_string(res->status) + ": " + res->body;
