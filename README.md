@@ -3,7 +3,7 @@
 Lokaler Agenten-Framework-Server (C++23, `cpp-httplib`). Dient als Backend für
 ein Live-Dashboard (SSE) und als Ask/Stream-Endpoint für Editor-Integrationen
 (siehe [`ai.nvim`](../ai.nvim)-Integrationsplan unter
-`nvim/docs/ROADMAP/reports/loomai-ai-nvim-integration.md`).
+`nvim/docs/ROADMAP/reports/ai/loomai-ai-nvim-integration.md`).
 
 ## Bauen
 
@@ -18,6 +18,12 @@ curl -sL https://raw.githubusercontent.com/yhirose/cpp-httplib/v0.15.3/httplib.h
     -o third_party/httplib.h
 ```
 
+Zusätzlich braucht der ModelRouter OpenSSL (Header + Lib), für die HTTPS-Calls
+gegen OpenAI/Anthropic/Gemini (`ollama_client` allein bräuchte es nicht, aber
+alle vier Backends werden in einem Binary gelinkt). Unter MSYS2/mingw64:
+`pacman -S mingw-w64-x86_64-openssl` (bringt Header + `libssl`/`libcrypto`
+mit); unter Debian/Ubuntu `apt install libssl-dev`.
+
 Danach mit CMake bauen:
 
 ```bash
@@ -26,10 +32,13 @@ cmake --build build -j4
 ```
 
 Unter Windows mit MinGW/g++ explizit den Generator angeben, falls CMake nicht
-automatisch das Richtige wählt:
+automatisch das Richtige wählt -- und `OPENSSL_ROOT_DIR` setzen, falls CMake
+das MSYS2-OpenSSL nicht von selbst findet (ein separat installiertes CMake
+sucht standardmäßig nicht im mingw64-Baum):
 
 ```bash
-cmake -B build -G "MinGW Makefiles" -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Debug
+cmake -B build -G "MinGW Makefiles" -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Debug \
+    -DOPENSSL_ROOT_DIR=C:/msys64/mingw64
 cmake --build build -j4
 ```
 
@@ -42,12 +51,29 @@ cmake --build build -j4
 Der Server bindet auf `127.0.0.1:8080` (bewusst nicht `0.0.0.0` — kein
 Editor-Companion-Prozess soll versehentlich im LAN erreichbar sein).
 
-Für `/ask` und `/ask/stream` muss ein lokaler [Ollama](https://ollama.com)
+`/ask`/`/ask/stream` routen per Modellname-Präfix an eines von vier Backends
+(siehe "ModelRouter" unten) -- ohne passenden Präfix (oder ganz ohne `model`)
+geht es an das lokale Ollama:
+
+Für den Ollama-Fallback muss ein lokaler [Ollama](https://ollama.com)
 laufen (Standard: `http://127.0.0.1:11434`). Abweichender Host via
 `LOOMAI_OLLAMA_HOST` (**nicht** `OLLAMA_HOST` — das ist bereits durch Ollama
 selbst als Bind-Adresse des Ollama-*Servers* belegt, z. B. `0.0.0.0:11434`,
 und damit kein gültiges Client-Ziel). Standardmodell via
 `LOOMAI_DEFAULT_MODEL`, sonst `llama3.1:8b-q5_K_M`.
+
+Für die drei Cloud-Backends je ein API-Key als Env-Var, sonst meldet `/ask*`
+einen klaren Konfigurationsfehler statt einen Request zu versuchen:
+
+| Backend | Modellname-Präfix | Env-Var |
+|---|---|---|
+| OpenAI | `gpt-`, `o1-`, `o3-` | `OPENAI_API_KEY` |
+| Anthropic | `claude-` | `ANTHROPIC_API_KEY` |
+| Gemini | `gemini-` | `GEMINI_API_KEY` |
+| Ollama (lokal) | alles andere / kein `model` | -- (s. o.) |
+
+`GET /health` zeigt, welche Backends aktuell konfiguriert sind (nur
+Presence-Check, nie der Key-Wert selbst).
 
 ## HTTP-API
 
@@ -62,7 +88,11 @@ und damit kein gültiges Client-Ziel). Standardmodell via
 `/health`:
 
 ```json
-{ "status": "ready", "model_router_ready": true }
+{
+  "status": "ready",
+  "model_router_ready": true,
+  "backends": { "ollama": true, "openai": true, "anthropic": false, "gemini": false }
+}
 ```
 
 `/ask` — Request:
@@ -98,12 +128,31 @@ data: [DONE]
 
 Details und die Motivation für diesen Vertrag (was `ai.nvim` als
 Provider-Kontrakt voraussetzt) stehen in
-`nvim/docs/ROADMAP/reports/loomai-ai-nvim-integration.md`.
+`nvim/docs/ROADMAP/reports/ai/loomai-ai-nvim-integration.md`.
+
+## ModelRouter
+
+`/ask`/`/ask/stream` dispatchen per Modellname-Präfix an eines von vier
+Backend-Clients (`src/{ollama,openai,anthropic,gemini}_client.{hpp,cpp}`),
+siehe Tabelle oben. Bewusst Präfix-Routing statt eines expliziten
+`provider`-Felds im Request: der HTTP-Vertrag bleibt dadurch unverändert
+(kein Anpassungsbedarf in `ai.nvim`s `loomai.lua`). Jeder Cloud-Client
+behandelt einen Fehler mitten im Stream defensiv (siehe `model_client.hpp`s
+`error_text`/`recover_error_body`) -- eine Auth-Fehlerantwort kommt bei
+OpenAI/Anthropic/Gemini teils als rohe, nicht-SSE-förmige JSON ohne
+abschließenden Zeilenumbruch zurück statt als SSE-Event; live gegen alle
+drei echten APIs verifiziert (inkl. eines bewusst ungültigen Test-Keys, um
+den Fehlerpfad auszulösen), nicht nur angenommen.
 
 ## Stand / was fehlt
 
-- Kein `ModelRouter` — `/ask*` ruft aktuell direkt Ollama auf, `model` wird
-  ungeprüft durchgereicht (siehe `docs/Guides/
-  ki-agenten-framework-architektur.md`, Abschnitt 11).
-- Kein Anthropic-Client (Cloud-Fallback).
-- Kein Auth/API-Key nötig, solange der Server nur auf `127.0.0.1` hört.
+- Kein Auth/API-Key für den Server selbst nötig, solange er nur auf
+  `127.0.0.1` hört (die drei Cloud-*Backends* brauchen natürlich ihre
+  eigenen Keys, s. o.).
+- `ollama_client.cpp` öffnet pro Request eine neue TCP-Verbindung zu Ollama
+  statt sie wiederzuverwenden -- bekannt, bewusst zurückgestellt (bräuchte
+  ein durchdachtes Pooling-Design), siehe `ai.nvim`-Handover.
+- Modellname-Präfix-Liste (`gpt-`/`o1-`/`o3-`/`claude-`/`gemini-`) ist
+  hartkodiert in `main.cpp`s Router, keine Konfigurationsmöglichkeit für
+  eigene/zukünftige Präfixe -- bislang kein Bedarf, da alle drei Anbieter
+  ihre Modellnamen stabil so präfixieren.

@@ -491,8 +491,19 @@ bool Orchestrator::rollback_to(SnapshotID target) {
 ### Phase 1: Model Integration (Woche 3-4)
 
 - [x] Ollama REST-Client in C++ (HTTP GET/POST via cpp-httplib) — `src/ollama_client.hpp/.cpp`
-- [ ] Anthropic API Client (streaming SSE-Antworten)
-- [ ] Model Router mit einfacher VRAM-Heuristik (aktuell: fest Ollama, `model` per Request frei wählbar)
+- [x] Anthropic API Client (streaming SSE-Antworten) — `src/anthropic_client.hpp/.cpp`
+      (2026-09-14). Bonus, über den ursprünglichen Punkt hinaus: auch
+      `src/openai_client.hpp/.cpp` und `src/gemini_client.hpp/.cpp`, aus
+      demselben `ai.nvim`-Integrationsanlass (siehe README "ModelRouter").
+- [ ] Model Router mit VRAM-Heuristik/Task-Typ-Routing (4.2 oben) — **nicht**
+      das, was jetzt existiert. Umgesetzt (2026-09-14) ist ein simpler
+      Modellname-Präfix-Router in `main.cpp` (`gpt-`/`o1-`/`o3-`→OpenAI,
+      `claude-`→Anthropic, `gemini-`→Gemini, sonst→Ollama) — der Aufrufer
+      wählt das Modell explizit, keine automatische VRAM-/Task-Entscheidung.
+      Reicht für `ai.nvim`s Anwendungsfall (Nutzer wählt `provider`/`model`
+      selbst), deckt aber nicht die hier ursprünglich skizzierte
+      RoutingPolicy ab. Die dafür nötige VRAM-Erkennung/Task-Klassifikation
+      bleibt offen.
 - [x] Erster "Hello World" Agent: sendet Prompt, gibt Antwort zurück — `POST /ask`
       (siehe [README.md](../../README.md) und `nvim/docs/ROADMAP/reports/
       loomai-ai-nvim-integration.md`, Aufgabe B/C für den HTTP-Vertrag,

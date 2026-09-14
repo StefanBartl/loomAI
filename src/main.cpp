@@ -9,9 +9,63 @@
 
 #include "httplib.h"
 #include "nlohmann/json.hpp"
+
+#include "anthropic_client.hpp"
+#include "gemini_client.hpp"
 #include "ollama_client.hpp"
+#include "openai_client.hpp"
 
 using json = nlohmann::json;
+
+// ---------------------------------------------------------------------------
+// ModelRouter: dispatch by model-name prefix ("claude-*"/"gpt-*"/"o1-*"/
+// "o3-*"/"gemini-*" go to the matching cloud client; anything else,
+// including no model at all, falls back to the local Ollama client -- the
+// only backend that existed before this router). A prefix router keeps the
+// existing /ask and /ask/stream HTTP contract unchanged (no new request
+// field ai.nvim's loomai.lua would need to set) -- see the ai.nvim
+// handover's loomAI ModelRouter scoping, Option (a), for the reasoning.
+// ---------------------------------------------------------------------------
+namespace {
+
+bool starts_with(const std::string& value, const std::string& prefix) {
+    return value.rfind(prefix, 0) == 0;
+}
+
+loomai::AskResult route_ask(const std::string& prompt,
+                             const std::string& system,
+                             const std::string& model,
+                             int timeout_ms) {
+    if (starts_with(model, "claude-")) {
+        return loomai::anthropic::ask(prompt, system, model, timeout_ms);
+    }
+    if (starts_with(model, "gpt-") || starts_with(model, "o1-") || starts_with(model, "o3-")) {
+        return loomai::openai::ask(prompt, system, model, timeout_ms);
+    }
+    if (starts_with(model, "gemini-")) {
+        return loomai::gemini::ask(prompt, system, model, timeout_ms);
+    }
+    return loomai::ollama::ask(prompt, system, model, timeout_ms);
+}
+
+std::string route_ask_stream(const std::string& prompt,
+                              const std::string& system,
+                              const std::string& model,
+                              int timeout_ms,
+                              const std::function<void(const std::string&)>& on_delta) {
+    if (starts_with(model, "claude-")) {
+        return loomai::anthropic::ask_stream(prompt, system, model, timeout_ms, on_delta);
+    }
+    if (starts_with(model, "gpt-") || starts_with(model, "o1-") || starts_with(model, "o3-")) {
+        return loomai::openai::ask_stream(prompt, system, model, timeout_ms, on_delta);
+    }
+    if (starts_with(model, "gemini-")) {
+        return loomai::gemini::ask_stream(prompt, system, model, timeout_ms, on_delta);
+    }
+    return loomai::ollama::ask_stream(prompt, system, model, timeout_ms, on_delta);
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Event-Bus (vereinfacht für ersten Schritt)
@@ -88,6 +142,16 @@ int main() {
     std::cout << "Stream:    POST http://127.0.0.1:8080/ask/stream\n";
     std::cout << "Ollama:    " << loomai::ollama::host()
                << " (model default: " << loomai::ollama::default_model() << ")\n";
+    std::cout << "OpenAI:    "
+               << (loomai::openai::configured() ? "configured" : "not configured (OPENAI_API_KEY unset)")
+               << "\n";
+    std::cout << "Anthropic: "
+               << (loomai::anthropic::configured() ? "configured"
+                                                    : "not configured (ANTHROPIC_API_KEY unset)")
+               << "\n";
+    std::cout << "Gemini:    "
+               << (loomai::gemini::configured() ? "configured" : "not configured (GEMINI_API_KEY unset)")
+               << "\n";
     std::cout << "Stoppen:   Ctrl+C\n\n";
 
     httplib::Server svr;
@@ -152,12 +216,23 @@ int main() {
         json body;
         body["status"] = "ready";
         body["model_router_ready"] = true;
+        // Presence-only, like everywhere else in this project -- never the
+        // key values themselves. Lets a manual `curl /health` (see the
+        // ai.nvim live-testing-plan) see which cloud backends are even
+        // worth trying without guessing from an /ask error message.
+        body["backends"] = {
+            {"ollama", true},
+            {"openai", loomai::openai::configured()},
+            {"anthropic", loomai::anthropic::configured()},
+            {"gemini", loomai::gemini::configured()},
+        };
         res.set_content(body.dump(), "application/json");
     });
 
-    // Non-Streaming Ask-Endpoint für ai.nvim's M.ask() (Aufgabe B). Ruft
-    // aktuell direkt Ollama; ein echter ModelRouter (lokal/cloud) kann hier
-    // später ansetzen, ohne dass sich der HTTP-Kontrakt ändert.
+    // Non-Streaming Ask-Endpoint für ai.nvim's M.ask() (Aufgabe B).
+    // route_ask() dispatcht per Modellname-Präfix an Ollama/OpenAI/
+    // Anthropic/Gemini -- der HTTP-Kontrakt selbst ändert sich dadurch
+    // nicht (kein neues Request-Feld nötig).
     svr.Post("/ask", [](const httplib::Request& req, httplib::Response& res) {
         res.set_header("Access-Control-Allow-Origin", "*");
 
@@ -173,7 +248,7 @@ int main() {
         std::string model  = body.value("model", "");
         int timeout_ms     = body.value("timeout_ms", 60000);
 
-        auto result = loomai::ollama::ask(prompt, system, model, timeout_ms);
+        auto result = route_ask(prompt, system, model, timeout_ms);
         if (!result.ok) {
             send_json_error(res, 502, result.error_message);
             return;
@@ -186,8 +261,8 @@ int main() {
             out["stop_reason"] = result.stop_reason;
         }
         out["usage"] = {
-            {"prompt_tokens", result.prompt_eval_count},
-            {"completion_tokens", result.eval_count},
+            {"prompt_tokens", result.prompt_tokens},
+            {"completion_tokens", result.completion_tokens},
         };
         res.set_content(out.dump(), "application/json");
     });
@@ -228,7 +303,7 @@ int main() {
                 // request. Everything below is defensive because of that,
                 // not because an exception is expected in the normal case.
                 try {
-                    std::string err = loomai::ollama::ask_stream(
+                    std::string err = route_ask_stream(
                         prompt, system, model, timeout_ms,
                         [&](const std::string& delta) {
                             write_event(json{{"delta", delta}});

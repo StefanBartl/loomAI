@@ -3,19 +3,18 @@
 #include <functional>
 #include <string>
 
+#include "model_client.hpp"
+
 // Minimal client for Ollama's local REST API (POST /api/generate), used to
 // back loomAI's /ask and /ask/stream endpoints. See docs/Guides/
 // ki-agenten-framework-architektur.md, Phase 1, "Ollama REST-Client in C++".
+//
+// Returns the shared loomai::AskResult (see model_client.hpp) rather than a
+// private struct: main.cpp's model-name-prefix router dispatches to this or
+// one of the cloud clients (openai/anthropic/gemini) and needs one uniform
+// result shape to build its HTTP response from, not four near-identical
+// ones.
 namespace loomai::ollama {
-
-struct AskResult {
-    bool ok = false;
-    std::string text;
-    std::string stop_reason;
-    std::string error_message;
-    long prompt_eval_count = 0;
-    long eval_count = 0;
-};
 
 // Base URL of the local Ollama daemon. Reads LOOMAI_OLLAMA_HOST, falls back
 // to http://127.0.0.1:11434 (Ollama's own default). Deliberately not named
@@ -29,7 +28,7 @@ std::string host();
 std::string default_model();
 
 // Blocking, non-streaming call to /api/generate.
-AskResult ask(const std::string& prompt,
+loomai::AskResult ask(const std::string& prompt,
               const std::string& system,
               const std::string& model,
               int timeout_ms);
