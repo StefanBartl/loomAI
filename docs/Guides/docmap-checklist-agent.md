@@ -83,3 +83,20 @@ kann sofort genutzt werden, sobald `documentation.nvim` seine Seite baut
 nicht vorziehen, nur weil dieser eine Anwendungsfall danach fragt — Phase 3
 so anzugehen, wie es die eigene Roadmap schon vorsieht, trägt diesen
 Anwendungsfall automatisch mit, wenn es an der Zeit ist.
+
+## Erweiterung: Rules-Worklist (L10)
+
+Derselbe Anschluss trägt noch einen zweiten Eingang. Neben den
+Checklist-Items (L6) sollen die **manuellen Regeln** aus `rules.nvim` — die
+ohne automatischen `check` — an einen Agenten gehen können, angestoßen aus
+`docmap-desktop` und aus Neovim. Das Konzept dazu steht in
+`E:\repos\docmap-desktop\docs\RULES_AGENT_CONCEPT.md`; hier nur, was es für
+loomAI bedeutet.
+
+| Frage | Antwort |
+|---|---|
+| Was muss loomAI dafür bauen? | **Nichts** für die erste Version. Es bleibt ein `/ask` pro Regel (Prompt + Regeltext + Dateiauszüge, ein Text zurück). Prompt-Bau und Prüfung der Antwort passieren beim Aufrufer, nicht hier. |
+| Warum kein Browser-Aufruf aus der App? | Die Origin-Sperre (`set_pre_routing_handler`, 403 bei fremdem `Origin`) lässt Nicht-Browser-Clients durch, blockt aber jede Webview. Die App ruft `/ask` deshalb aus dem Rust-Teil auf, nicht aus dem Frontend. Die Sperre bleibt so, wie sie ist. |
+| Was sieht der Nutzer vor dem Senden? | Das aufgelöste Backend. Ob ein Aufruf lokal bleibt oder Dateiauszüge an einen Cloud-Anbieter gehen, entscheidet allein der Modellname-Präfix. `/health` meldet schon heute, welche Cloud-Backends konfiguriert sind (nur Präsenz, nie Schlüssel) — die App zeigt das vor jedem Lauf an. |
+| Gibt es einen optionalen Wunsch? | Ein optionales `temperature`-Feld auf `/ask`, an alle vier Backends durchgereicht (im Code kommt es bisher nirgends vor). Gleiche Regel, gleiche Dateien, weniger schwankende Antwort. Kein JSON-Modus: den bieten nicht alle vier Backends in derselben Form an, der Aufrufer verlangt JSON im Prompt und erzwingt es selbst. Aufwand **~0,5–1 Session**, nicht blockierend. |
+| DecisionQueue? | Wie oben: nicht vorziehen. Regeln, die einen Agenten brauchen, der selbst im Repo *navigiert*, brauchen Werkzeuge und damit Phase 3/4 — die Rules-Worklist markiert sie als "zu breit für einen einzelnen Aufruf", statt zu raten. |
