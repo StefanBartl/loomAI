@@ -6,8 +6,9 @@
 #include "model_client.hpp"
 
 // Minimal client for Ollama's local REST API (POST /api/generate), used to
-// back loomAI's /ask and /ask/stream endpoints. See docs/Guides/
-// ki-agenten-framework-architektur.md, Phase 1, "Ollama REST-Client in C++".
+// back loomAI's /ask and /ask/stream endpoints. See wkdbook-loomai/Guides/
+// ki-agenten-framework-architektur.md (private repo), Phase 1, "Ollama
+// REST-Client in C++".
 //
 // Returns the shared loomai::AskResult (see model_client.hpp) rather than a
 // private struct: main.cpp's model-name-prefix router dispatches to this or

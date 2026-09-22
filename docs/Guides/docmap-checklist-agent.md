@@ -45,7 +45,7 @@ würde ein Konzept duplizieren, das hier bereits eingeplant ist.
 |---|---|
 | `POST /ask`, `POST /ask/stream` | **Fertig.** Vier Backends (Ollama/OpenAI/Anthropic/Gemini) per Modellname-Präfix. Für den einfachen Fall — ein Prompt pro Checklist-Item, ein Text zurück — reicht das bereits, genau wie über `ai.nvim`s Provider-Schicht. |
 | `POST /decision` | **Existiert als Route, nicht als Queue.** `main.cpp` (Zeile ~232) protokolliert die menschliche Antwort nur als Dashboard-Event und antwortet sofort mit `{"ok":true}` — kein Pausieren/Fortsetzen irgendeines Agenten, weil dort noch nichts läuft, das pausiert werden könnte. Setzt Bedingung 2 oben also noch **nicht** um. |
-| Orchestrator / DecisionQueue / Agent-Worker | **Nicht gebaut.** Phase 3 der eigenen Roadmap (`ki-agenten-framework-architektur.md`, Abschnitt 11), jede Box offen. |
+| Orchestrator / DecisionQueue / Agent-Worker | **Nicht gebaut.** Phase 3 der eigenen Roadmap (`ki-agenten-framework-architektur.md` in `wkdbook-loomai/Guides/`, privates Repo, Abschnitt 11), jede Box offen. |
 | Dashboard-Decision-UI (Modal Hard-Stop, Rollback-Liste) | **Nicht gebaut.** Phase 4, jede Box offen. |
 | Sandbox (Podman, Snapshots) | **Nicht gebaut** — für diesen Anwendungsfall auch nicht nötig: ein Checklist-Verdikt ist Text, keine Container-Operation. |
 
