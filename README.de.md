@@ -74,6 +74,12 @@ einen klaren Konfigurationsfehler statt einen Request zu versuchen:
 | Gemini | `gemini-` | `GEMINI_API_KEY` |
 | Ollama (lokal) | alles andere / kein `model` | -- (s. o.) |
 
+Die Präfix-Liste jedes Backends lässt sich komplett überschreiben
+(kommagetrennt) via `LOOMAI_PREFIXES_OPENAI`/`LOOMAI_PREFIXES_CLAUDE`/
+`LOOMAI_PREFIXES_GEMINI` — z. B. `LOOMAI_PREFIXES_OPENAI=gpt-,o1-,o3-,o4-`,
+um eine neue OpenAI-Modellfamilie ohne Neubau aufzunehmen. Wird einmal beim
+Start gelesen.
+
 `GET /health` zeigt, welche Backends aktuell konfiguriert sind (nur
 Presence-Check, nie der Key-Wert selbst).
 
@@ -102,6 +108,10 @@ Presence-Check, nie der Key-Wert selbst).
 ```json
 { "prompt": "...", "system": "optional", "model": "optional", "timeout_ms": 60000 }
 ```
+
+`timeout_ms` ist standardmäßig 60000 für die drei Cloud-Backends und
+120000 für Ollama (ein lokales Modell kann bei einem kalten ersten Request
+mehrere Sekunden zum Laden brauchen) — nur wenn der Request es weglässt.
 
 `/ask` — Response (`200`):
 

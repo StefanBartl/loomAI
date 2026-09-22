@@ -75,6 +75,11 @@ attempting a request:
 | Gemini | `gemini-` | `GEMINI_API_KEY` |
 | Ollama (local) | anything else / no `model` | -- (see above) |
 
+Each backend's prefix list can be overridden wholesale (comma-separated)
+via `LOOMAI_PREFIXES_OPENAI`/`LOOMAI_PREFIXES_CLAUDE`/`LOOMAI_PREFIXES_GEMINI`
+-- e.g. `LOOMAI_PREFIXES_OPENAI=gpt-,o1-,o3-,o4-` to pick up a new OpenAI
+model family without a rebuild. Read once at startup.
+
 `GET /health` shows which backends are currently configured (presence
 check only, never the key value itself).
 
@@ -103,6 +108,10 @@ check only, never the key value itself).
 ```json
 { "prompt": "...", "system": "optional", "model": "optional", "timeout_ms": 60000 }
 ```
+
+`timeout_ms` defaults to 60000 for the three cloud backends and 120000 for
+Ollama (a local model can take several seconds just to load on a cold
+first request) -- only when the request omits it.
 
 `/ask` -- response (`200`):
 
