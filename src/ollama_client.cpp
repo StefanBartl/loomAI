@@ -24,8 +24,19 @@ std::string env_or(const char* name, const std::string& fallback) {
     return (value && *value) ? std::string(value) : fallback;
 }
 
-httplib::Client make_client(int timeout_ms) {
-    httplib::Client cli(host());
+// One persistent, keep-alive client per worker thread instead of a new TCP
+// connection on every /ask and /ask/stream request. main.cpp's httplib
+// Server dispatches each request to one of a fixed pool of worker threads
+// that each handle requests sequentially, so a thread_local Client is
+// reused across many requests on that thread with no locking needed -- see
+// the loomAI handover's "Connection-Pooling" entry for why a
+// mutex-protected shared pool was ruled out in favor of this. `host()` is
+// read once, at the first request this thread handles: LOOMAI_OLLAMA_HOST
+// is an env var, not a live-reloadable setting, so a value fixed for the
+// life of the thread matches every other env lookup in this codebase.
+httplib::Client& client_for_thread(int timeout_ms) {
+    thread_local httplib::Client cli(host());
+    cli.set_keep_alive(true);
     cli.set_connection_timeout(std::chrono::milliseconds(timeout_ms));
     cli.set_read_timeout(std::chrono::milliseconds(timeout_ms));
     return cli;
@@ -65,7 +76,7 @@ AskResult ask(const std::string& prompt,
               int timeout_ms) {
     AskResult result;
 
-    auto cli = make_client(timeout_ms);
+    auto& cli = client_for_thread(timeout_ms);
     auto body = build_request(prompt, system, model, /*stream=*/false);
 
     auto res = cli.Post("/api/generate", body.dump(), "application/json");
@@ -103,7 +114,7 @@ std::string ask_stream(const std::string& prompt,
                         const std::string& model,
                         int timeout_ms,
                         const std::function<void(const std::string&)>& on_delta) {
-    auto cli = make_client(timeout_ms);
+    auto& cli = client_for_thread(timeout_ms);
     auto body = build_request(prompt, system, model, /*stream=*/true);
 
     // Ollama streams NDJSON (one JSON object per line), not SSE -- reframe

@@ -26,8 +26,16 @@ std::string api_key() {
     return env_or("GEMINI_API_KEY", "");
 }
 
-httplib::Client make_client(int timeout_ms) {
-    httplib::Client cli("https://generativelanguage.googleapis.com");
+// One persistent, keep-alive client (TCP + TLS session) per worker thread
+// instead of a fresh connection and handshake on every /ask and
+// /ask/stream request. See ollama_client.cpp's client_for_thread() for the
+// full reasoning (thread_local avoids any locking, since main.cpp's
+// httplib Server hands each request to one worker thread that handles
+// requests sequentially) -- identical here except the host is a fixed
+// literal, not an env-configurable one.
+httplib::Client& client_for_thread(int timeout_ms) {
+    thread_local httplib::Client cli("https://generativelanguage.googleapis.com");
+    cli.set_keep_alive(true);
     cli.set_connection_timeout(std::chrono::milliseconds(timeout_ms));
     cli.set_read_timeout(std::chrono::milliseconds(timeout_ms));
     return cli;
@@ -140,7 +148,7 @@ AskResult ask(const std::string& prompt,
         return result;
     }
 
-    auto cli = make_client(timeout_ms);
+    auto& cli = client_for_thread(timeout_ms);
     httplib::Headers headers = {{"x-goog-api-key", key}};
     auto body = build_body(prompt, system);
     std::string path = "/v1beta/models/" + model + ":generateContent";
@@ -194,7 +202,7 @@ std::string ask_stream(const std::string& prompt,
         return "gemini: invalid model name: " + model;
     }
 
-    auto cli = make_client(timeout_ms);
+    auto& cli = client_for_thread(timeout_ms);
     auto body = build_body(prompt, system);
     std::string path = "/v1beta/models/" + model + ":streamGenerateContent?alt=sse";
 
