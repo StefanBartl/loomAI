@@ -12,7 +12,7 @@ else()
 endif()
 
 # Header-only third-party deps, vendored into third_party/ (see
-# docs/Guides/setup-guide.md, Phase 2 -- gitignored, fetch locally).
+# wkdbook-loomai/Guides/setup-guide.md (author notes, not in this repo), Phase 2 -- gitignored, fetch locally).
 add_library(third_party_headers INTERFACE)
 target_include_directories(third_party_headers INTERFACE third_party)
 
