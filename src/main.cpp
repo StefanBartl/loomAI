@@ -10,6 +10,10 @@
 #include "httplib.h"
 #include "nlohmann/json.hpp"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "anthropic_client.hpp"
 #include "gemini_client.hpp"
 #include "ollama_client.hpp"
@@ -191,8 +195,39 @@ void send_json_error(httplib::Response& res, int status, const std::string& mess
 // Origin header at all and are unaffected, and the dashboard's own JS is
 // always same-origin.
 // ---------------------------------------------------------------------------
+// The port is configurable (LOOMAI_PORT / --port, needed by the desktop app's
+// sidecar), so the allowed origins follow the port the server really listens
+// on instead of a hardcoded 8080.
+constexpr int kDefaultPort = 8080;
+int g_port = kDefaultPort;
+
 bool is_allowed_origin(const std::string& origin) {
-    return origin == "http://127.0.0.1:8080" || origin == "http://localhost:8080";
+    const std::string port = std::to_string(g_port);
+    return origin == "http://127.0.0.1:" + port || origin == "http://localhost:" + port;
+}
+
+// Parses a TCP port; returns 0 for anything that is not a plain 1..65535.
+int parse_port(const std::string& text) {
+    if (text.empty() || text.size() > 5) {
+        return 0;
+    }
+    for (char c : text) {
+        if (c < '0' || c > '9') {
+            return 0;
+        }
+    }
+    int value = std::stoi(text);
+    return (value >= 1 && value <= 65535) ? value : 0;
+}
+
+// The Windows console defaults to a legacy code page, so the UTF-8 this server
+// writes (umlauts, dashes in the status lines) shows up as mojibake. Switching
+// the output code page fixes that for the process; it never touches the
+// user's console settings afterwards.
+void use_utf8_console() {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -229,13 +264,58 @@ void run_simulation_agent() {
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
-int main() {
+int main(int argc, char** argv) {
+    use_utf8_console();
+
+    // Port: --port N wins over LOOMAI_PORT, default 8080 (what ai.nvim expects).
+    // An empty LOOMAI_PORT counts as unset (a common way to "clear" a variable),
+    // but an explicit empty --port is a mistake and must not silently fall back
+    // to the default.
+    std::string port_text;
+    bool have_port = false;
+    if (const char* env_port = std::getenv("LOOMAI_PORT")) {
+        if (*env_port) {
+            port_text = env_port;
+            have_port = true;
+        }
+    }
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--port" && i + 1 < argc) {
+            port_text = argv[++i];
+            have_port = true;
+        } else if (arg.rfind("--port=", 0) == 0) {
+            port_text = arg.substr(7);
+            have_port = true;
+        } else {
+            std::cerr << "loomai: unknown argument '" << arg << "' (supported: --port N)\n";
+            return 2;
+        }
+    }
+    if (have_port) {
+        g_port = parse_port(port_text);
+        if (g_port == 0) {
+            std::cerr << "loomai: invalid port '" << port_text << "' (expected 1-65535)\n";
+            return 2;
+        }
+    }
+    const std::string base = "http://127.0.0.1:" + std::to_string(g_port);
+
+    // The dashboard is served from this directory; the desktop app's sidecar
+    // does not start inside it, so it can be pointed elsewhere.
+    std::string dashboard_dir = "./dashboard";
+    if (const char* env_dir = std::getenv("LOOMAI_DASHBOARD_DIR")) {
+        if (*env_dir) {
+            dashboard_dir = env_dir;
+        }
+    }
+
     std::cout << "=== loomAI Framework ===\n";
-    std::cout << "Dashboard: http://127.0.0.1:8080\n";
-    std::cout << "SSE:       http://127.0.0.1:8080/events\n";
-    std::cout << "Health:    http://127.0.0.1:8080/health\n";
-    std::cout << "Ask:       POST http://127.0.0.1:8080/ask\n";
-    std::cout << "Stream:    POST http://127.0.0.1:8080/ask/stream\n";
+    std::cout << "Dashboard: " << base << "\n";
+    std::cout << "SSE:       " << base << "/events\n";
+    std::cout << "Health:    " << base << "/health\n";
+    std::cout << "Ask:       POST " << base << "/ask\n";
+    std::cout << "Stream:    POST " << base << "/ask/stream\n";
     std::cout << "Ollama:    " << loomai::ollama::host()
                << " (model default: " << loomai::ollama::default_model() << ")\n";
     std::cout << "OpenAI:    "
@@ -254,9 +334,15 @@ int main() {
 
     httplib::Server svr;
 
-    // Statische Dashboard-Dateien aus ./dashboard/ ausliefern
-    if (!svr.set_mount_point("/", "./dashboard")) {
-        std::cerr << "[FEHLER] ./dashboard Verzeichnis nicht gefunden!\n";
+    // Request bodies here are prompts and small JSON documents; a megabyte is
+    // far more than any legitimate one, and bounds what a local client can make
+    // the server buffer.
+    svr.set_payload_max_length(1024 * 1024);
+
+    // Statische Dashboard-Dateien ausliefern
+    if (!svr.set_mount_point("/", dashboard_dir)) {
+        std::cerr << "[FEHLER] Dashboard-Verzeichnis '" << dashboard_dir
+                  << "' nicht gefunden!\n";
         return 1;
     }
 
@@ -441,13 +527,13 @@ int main() {
     // unchecked return here made the process exit silently with no
     // indication why, which is exactly what happened during ModelRouter
     // testing when a stray leftover instance still held the port.
-    bool listen_ok = svr.listen("127.0.0.1", 8080);
+    bool listen_ok = svr.listen("127.0.0.1", g_port);
 
     running = false;
     sim.join();
 
     if (!listen_ok) {
-        std::cerr << "loomai: failed to bind 127.0.0.1:8080 (port already in use?)\n";
+        std::cerr << "loomai: failed to bind 127.0.0.1:" << g_port << " (port already in use?)\n";
         return 1;
     }
     return 0;
