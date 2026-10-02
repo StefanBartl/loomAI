@@ -62,6 +62,11 @@ case "$(uname -s)" in
         exit 1 ;;
 esac
 
+# The launcher bakes the install path in, so a relative --prefix/--bin-dir would
+# break as soon as it is run from another directory.
+case "$PREFIX" in /*) ;; *) PREFIX="$PWD/$PREFIX" ;; esac
+case "$BIN_DIR" in /*) ;; *) BIN_DIR="$PWD/$BIN_DIR" ;; esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$REPO_ROOT/build"
 APP_DIR="$PREFIX/app"
@@ -92,9 +97,19 @@ sha256_of() {
 }
 
 # Prints the PID(s) of a loomai process whose executable is the installed one.
+# The path goes into an extended regex, so escape its metacharacters first.
 running_install() {
     command -v pgrep >/dev/null 2>&1 || return 0
-    pgrep -f "^$APP_DIR/loomai( |\$)" 2>/dev/null || true
+    local escaped
+    escaped="$(printf '%s' "$APP_DIR/loomai" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+    pgrep -f "^$escaped( |\$)" 2>/dev/null || true
+}
+
+# True if something already listens on 127.0.0.1:<port>. A plain TCP connect
+# (bash's /dev/tcp) rather than an HTTP request: another service that answers
+# 404 or speaks another protocol must count as "in use" too.
+port_in_use() {
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -262,10 +277,10 @@ esac
 # ---------------------------------------------------------------------------
 if [ "$SKIP_SMOKE" -eq 0 ]; then
     step "Smoke test (installed copy, GET /health)"
-    if curl -fs --max-time 1 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
-        warn "port $PORT answers already (loomAI running?) -- skipping the smoke test"
+    if port_in_use "$PORT"; then
+        warn "port $PORT is in use (loomAI already running?) -- skipping the smoke test"
     else
-        log="$(mktemp)"
+        log="$(mktemp "${TMPDIR:-/tmp}/loomai-setup.XXXXXX")"
         ( cd "$APP_DIR" && exec "$APP_DIR/loomai" ) >"$log" 2>&1 &
         server_pid=$!
         trap 'kill "$server_pid" 2>/dev/null || true; rm -f -- "$log"' EXIT

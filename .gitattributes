@@ -1,0 +1,4 @@
+# Shell scripts must keep LF line endings on every checkout (core.autocrlf=true
+# on Windows would otherwise turn setup.sh into CRLF and bash fails with
+# "$'\r': command not found", e.g. when the repo is used from WSL).
+*.sh text eol=lf
