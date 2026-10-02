@@ -115,7 +115,7 @@ json public_view(const json& record) {
 
 }  // namespace
 
-const std::vector<std::string>& prefixes(const std::string& provider) {
+const std::vector<std::string>& prefixes(std::string_view provider) {
     static const std::vector<std::string> anthropic = prefixes_for("LOOMAI_PREFIXES_CLAUDE", {"claude-"});
     static const std::vector<std::string> openai =
         prefixes_for("LOOMAI_PREFIXES_OPENAI", {"gpt-", "o1-", "o3-"});

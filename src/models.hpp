@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "config.hpp"
@@ -34,7 +35,7 @@ Route resolve(const std::string& model);
 
 // Model-name prefixes of "openai", "anthropic" or "gemini" (environment override
 // read once, like every other environment lookup at startup).
-const std::vector<std::string>& prefixes(const std::string& provider);
+const std::vector<std::string>& prefixes(std::string_view provider);
 
 // Public view of the custom models (never contains a key):
 // [{"id","name","provider","upstream_model","base_url"?,"has_key"}].

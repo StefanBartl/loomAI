@@ -15,6 +15,7 @@
 #endif
 
 #include "anthropic_client.hpp"
+#include "api.hpp"
 #include "gemini_client.hpp"
 #include "models.hpp"
 #include "ollama_client.hpp"
@@ -133,10 +134,7 @@ void push_event(const std::string& type,
 // see wkdbook-loomai/Backlog/FEATURES/loomai-ai-nvim-integration.md (author notes, not in this repo)
 // ---------------------------------------------------------------------------
 void send_json_error(httplib::Response& res, int status, const std::string& message) {
-    res.status = status;
-    json body;
-    body["error"]["message"] = message;
-    res.set_content(body.dump(), "application/json");
+    loomai::api::send_error(res, status, message);
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +317,10 @@ int main(int argc, char** argv) {
         }
         return httplib::Server::HandlerResponse::Unhandled;
     });
+
+    // Management API (models, settings, keys, custom models) for the dashboard
+    // and the desktop app; the ai.nvim contract below stays as it is.
+    loomai::api::register_routes(svr);
 
     // SSE-Endpoint: Browser verbindet sich hier und empfängt live Events
     svr.Get("/events", [](const httplib::Request&, httplib::Response& res) {

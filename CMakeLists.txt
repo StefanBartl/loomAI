@@ -20,6 +20,7 @@ target_include_directories(third_party_headers INTERFACE third_party)
 # kept in its own library so the unit tests can link it without OpenSSL or
 # cpp-httplib.
 add_library(loomai_core STATIC
+    src/catalog_parse.cpp
     src/config.cpp
     src/models.cpp
     src/secrets.cpp
@@ -32,6 +33,8 @@ endif()
 
 add_executable(loomai
     src/main.cpp
+    src/api.cpp
+    src/catalog.cpp
     src/ollama_client.cpp
     src/openai_client.cpp
     src/anthropic_client.cpp
@@ -65,6 +68,7 @@ if(LOOMAI_BUILD_TESTS)
     enable_testing()
     add_executable(loomai_tests
         tests/unit/test_main.cpp
+        tests/unit/test_catalog_parse.cpp
         tests/unit/test_config.cpp
         tests/unit/test_models.cpp
         tests/unit/test_secrets.cpp
