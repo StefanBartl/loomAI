@@ -21,6 +21,7 @@ target_include_directories(third_party_headers INTERFACE third_party)
 # cpp-httplib.
 add_library(loomai_core STATIC
     src/config.cpp
+    src/models.cpp
     src/secrets.cpp
 )
 target_include_directories(loomai_core PUBLIC src)
@@ -65,6 +66,7 @@ if(LOOMAI_BUILD_TESTS)
     add_executable(loomai_tests
         tests/unit/test_main.cpp
         tests/unit/test_config.cpp
+        tests/unit/test_models.cpp
         tests/unit/test_secrets.cpp
     )
     target_link_libraries(loomai_tests PRIVATE loomai_core)

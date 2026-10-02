@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include "config.hpp"
+#include "http_pool.hpp"
 #include "httplib.h"
 #include "nlohmann/json.hpp"
 
@@ -20,22 +21,11 @@ namespace {
 // point at a non-local host, unlike the hardcoded cloud-provider hosts.
 constexpr size_t kMaxLineBufferBytes = 1 << 20;  // 1 MiB
 
-// One persistent, keep-alive client per worker thread instead of a new TCP
-// connection on every /ask and /ask/stream request. main.cpp's httplib
-// Server dispatches each request to one of a fixed pool of worker threads
-// that each handle requests sequentially, so a thread_local Client is
-// reused across many requests on that thread with no locking needed -- see
-// the loomAI handover's "Connection-Pooling" entry for why a
-// mutex-protected shared pool was ruled out in favor of this. `host()` is
-// read once, at the first request this thread handles: LOOMAI_OLLAMA_HOST
-// is an env var, not a live-reloadable setting, so a value fixed for the
-// life of the thread matches every other env lookup in this codebase.
+// Keep-alive client for the *current* Ollama host (see http_pool.hpp). host()
+// is read on every request, so a host changed in the settings dialog takes
+// effect immediately instead of staying pinned to the first request's value.
 httplib::Client& client_for_thread(int timeout_ms) {
-    thread_local httplib::Client cli(host());
-    cli.set_keep_alive(true);
-    cli.set_connection_timeout(std::chrono::milliseconds(timeout_ms));
-    cli.set_read_timeout(std::chrono::milliseconds(timeout_ms));
-    return cli;
+    return loomai::client_for(host(), timeout_ms);
 }
 
 json build_request(const std::string& prompt,

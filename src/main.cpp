@@ -16,115 +16,71 @@
 
 #include "anthropic_client.hpp"
 #include "gemini_client.hpp"
+#include "models.hpp"
 #include "ollama_client.hpp"
 #include "openai_client.hpp"
+#include "secrets.hpp"
 
 using json = nlohmann::json;
 
 // ---------------------------------------------------------------------------
-// ModelRouter: dispatch by model-name prefix ("claude-*"/"gpt-*"/"o1-*"/
-// "o3-*"/"gemini-*" go to the matching cloud client; anything else,
-// including no model at all, falls back to the local Ollama client -- the
-// only backend that existed before this router). A prefix router keeps the
-// existing /ask and /ask/stream HTTP contract unchanged (no new request
-// field ai.nvim's loomai.lua would need to set) -- see the ai.nvim
-// handover's loomAI ModelRouter scoping, Option (a), for the reasoning.
+// ModelRouter: models::resolve() decides the backend -- an exact custom model
+// id first, then the model-name prefixes ("claude-*"/"gpt-*"/"o1-*"/"o3-*"/
+// "gemini-*", overridable with LOOMAI_PREFIXES_*), and anything else,
+// including no model at all, goes to the local Ollama client (the only backend
+// that existed before this router). Prefix routing keeps the /ask and
+// /ask/stream HTTP contract unchanged (no new request field ai.nvim's
+// loomai.lua would need to set) -- see the ai.nvim handover's loomAI
+// ModelRouter scoping, Option (a), for the reasoning. A custom model is just a
+// `model` value that happens to be registered in config.json.
 // ---------------------------------------------------------------------------
 namespace {
-
-bool starts_with(const std::string& value, const std::string& prefix) {
-    return value.rfind(prefix, 0) == 0;
-}
-
-std::vector<std::string> split_csv(const std::string& value) {
-    std::vector<std::string> parts;
-    size_t start = 0;
-    while (start <= value.size()) {
-        size_t comma = value.find(',', start);
-        size_t len = (comma == std::string::npos) ? std::string::npos : comma - start;
-        std::string part = value.substr(start, len);
-        if (!part.empty()) {
-            parts.push_back(part);
-        }
-        if (comma == std::string::npos) break;
-        start = comma + 1;
-    }
-    return parts;
-}
-
-// Model-name prefixes routed to each cloud backend, previously hardcoded
-// with no config option at all. `env_var`, if set, REPLACES `fallback`
-// wholesale (comma-separated) -- e.g. LOOMAI_PREFIXES_OPENAI=gpt-,o1-,o3-,o4-
-// to pick up a new model family without a rebuild. Read once per backend
-// (function-local static), same one-time-read contract every env lookup in
-// this codebase already has.
-std::vector<std::string> prefixes_for(const char* env_var,
-                                       std::initializer_list<const char*> fallback) {
-    const char* override_value = std::getenv(env_var);
-    if (override_value && *override_value) {
-        return split_csv(override_value);
-    }
-    return std::vector<std::string>(fallback.begin(), fallback.end());
-}
-
-const std::vector<std::string>& claude_prefixes() {
-    static const std::vector<std::string> prefixes = prefixes_for("LOOMAI_PREFIXES_CLAUDE", {"claude-"});
-    return prefixes;
-}
-
-const std::vector<std::string>& openai_prefixes() {
-    static const std::vector<std::string> prefixes =
-        prefixes_for("LOOMAI_PREFIXES_OPENAI", {"gpt-", "o1-", "o3-"});
-    return prefixes;
-}
-
-const std::vector<std::string>& gemini_prefixes() {
-    static const std::vector<std::string> prefixes = prefixes_for("LOOMAI_PREFIXES_GEMINI", {"gemini-"});
-    return prefixes;
-}
-
-bool matches_any(const std::string& model, const std::vector<std::string>& prefixes) {
-    for (const auto& prefix : prefixes) {
-        if (starts_with(model, prefix)) {
-            return true;
-        }
-    }
-    return false;
-}
 
 // Per-backend default timeout, used only when the caller's request body
 // omits "timeout_ms" -- ai.nvim's own loomai.lua always sends one, so this
 // only matters for other callers (a raw curl call, a future client).
 // Ollama's model can take several seconds just to load on a cold first
 // request (measured live against this machine's Ollama: ~4.5s cold vs
-// ~300ms warm for a 4.7GB model) -- a local backend earns a longer default
-// than the cloud ones, which fail on their own gateway timeouts well under
-// a minute anyway.
-constexpr int kDefaultTimeoutOllamaMs = 120000;
+// ~300ms warm for a 4.7GB model) -- a local backend (Ollama or a loopback
+// OpenAI-compatible server) earns a longer default than the cloud ones, which
+// fail on their own gateway timeouts well under a minute anyway.
+constexpr int kDefaultTimeoutLocalMs = 120000;
 constexpr int kDefaultTimeoutCloudMs = 60000;
 
 int default_timeout_for(const std::string& model) {
-    if (matches_any(model, claude_prefixes()) || matches_any(model, openai_prefixes()) ||
-        matches_any(model, gemini_prefixes())) {
-        return kDefaultTimeoutCloudMs;
-    }
-    return kDefaultTimeoutOllamaMs;
+    return loomai::models::resolve(model).local ? kDefaultTimeoutLocalMs : kDefaultTimeoutCloudMs;
+}
+
+// Endpoint for a user-defined OpenAI-compatible model. A key is optional (local
+// servers usually have none) but is sent when one is stored.
+loomai::openai::Endpoint endpoint_for(const loomai::models::Route& route) {
+    loomai::openai::Endpoint endpoint;
+    endpoint.base_url = route.base_url;
+    endpoint.path_prefix = route.path_prefix;
+    endpoint.api_key = loomai::secrets::get(route.key_name);
+    endpoint.label = route.label;
+    endpoint.key_required = false;
+    return endpoint;
 }
 
 loomai::AskResult route_ask(const std::string& prompt,
                              const std::string& system,
                              const std::string& model,
                              int timeout_ms) {
-    if (matches_any(model, claude_prefixes())) {
-        return loomai::anthropic::ask(prompt, system, model, timeout_ms);
+    const auto route = loomai::models::resolve(model);
+    if (route.provider == "anthropic") {
+        return loomai::anthropic::ask(prompt, system, route.upstream_model, timeout_ms);
     }
-    if (matches_any(model, openai_prefixes())) {
-        return loomai::openai::ask(prompt, system, model, timeout_ms);
+    if (route.provider == "openai") {
+        return loomai::openai::ask(prompt, system, route.upstream_model, timeout_ms);
     }
-    if (matches_any(model, gemini_prefixes())) {
-        return loomai::gemini::ask(prompt, system, model, timeout_ms);
+    if (route.provider == "gemini") {
+        return loomai::gemini::ask(prompt, system, route.upstream_model, timeout_ms);
     }
-    return loomai::ollama::ask(prompt, system, model, timeout_ms);
+    if (route.provider == "openai-compatible") {
+        return loomai::openai::ask(prompt, system, route.upstream_model, timeout_ms, endpoint_for(route));
+    }
+    return loomai::ollama::ask(prompt, system, route.upstream_model, timeout_ms);
 }
 
 std::string route_ask_stream(const std::string& prompt,
@@ -132,16 +88,21 @@ std::string route_ask_stream(const std::string& prompt,
                               const std::string& model,
                               int timeout_ms,
                               const std::function<void(const std::string&)>& on_delta) {
-    if (matches_any(model, claude_prefixes())) {
-        return loomai::anthropic::ask_stream(prompt, system, model, timeout_ms, on_delta);
+    const auto route = loomai::models::resolve(model);
+    if (route.provider == "anthropic") {
+        return loomai::anthropic::ask_stream(prompt, system, route.upstream_model, timeout_ms, on_delta);
     }
-    if (matches_any(model, openai_prefixes())) {
-        return loomai::openai::ask_stream(prompt, system, model, timeout_ms, on_delta);
+    if (route.provider == "openai") {
+        return loomai::openai::ask_stream(prompt, system, route.upstream_model, timeout_ms, on_delta);
     }
-    if (matches_any(model, gemini_prefixes())) {
-        return loomai::gemini::ask_stream(prompt, system, model, timeout_ms, on_delta);
+    if (route.provider == "gemini") {
+        return loomai::gemini::ask_stream(prompt, system, route.upstream_model, timeout_ms, on_delta);
     }
-    return loomai::ollama::ask_stream(prompt, system, model, timeout_ms, on_delta);
+    if (route.provider == "openai-compatible") {
+        return loomai::openai::ask_stream(prompt, system, route.upstream_model, timeout_ms, endpoint_for(route),
+                                          on_delta);
+    }
+    return loomai::ollama::ask_stream(prompt, system, route.upstream_model, timeout_ms, on_delta);
 }
 
 }  // namespace

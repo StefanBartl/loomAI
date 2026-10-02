@@ -409,6 +409,12 @@ json snapshot() {
     return g_doc;
 }
 
+void inspect(const std::function<void(const json&)>& read) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    ensure_loaded_locked();
+    read(g_doc);
+}
+
 Status mutate(const std::function<Status(json&)>& edit) {
     std::lock_guard<std::mutex> lock(g_mutex);
     ensure_loaded_locked();

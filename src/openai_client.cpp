@@ -2,7 +2,9 @@
 
 #include <cstdlib>
 
+#include "http_pool.hpp"
 #include "httplib.h"
+#include "net_util.hpp"
 #include "secrets.hpp"
 
 namespace loomai::openai {
@@ -22,19 +24,30 @@ std::string api_key() {
     return secrets::get("OPENAI_API_KEY");
 }
 
-// One persistent, keep-alive client (TCP + TLS session) per worker thread
-// instead of a fresh connection and handshake on every /ask and
-// /ask/stream request. See ollama_client.cpp's client_for_thread() for the
-// full reasoning (thread_local avoids any locking, since main.cpp's
-// httplib Server hands each request to one worker thread that handles
-// requests sequentially) -- identical here except the host is a fixed
-// literal, not an env-configurable one.
-httplib::Client& client_for_thread(int timeout_ms) {
-    thread_local httplib::Client cli("https://api.openai.com");
-    cli.set_keep_alive(true);
-    cli.set_connection_timeout(std::chrono::milliseconds(timeout_ms));
-    cli.set_read_timeout(std::chrono::milliseconds(timeout_ms));
-    return cli;
+// An API key must never travel in clear text across a network: plain http is
+// only acceptable to this machine itself. https is always fine.
+std::string key_transport_error(const Endpoint& endpoint) {
+    if (endpoint.api_key.empty() || endpoint.base_url.rfind("http://", 0) != 0) {
+        return "";
+    }
+    const std::string host = loomai::host_of(endpoint.base_url);
+    if (loomai::is_loopback_host(host)) {
+        return "";
+    }
+    return endpoint.label + ": refusing to send an API key over plain http to " + host +
+           " (use an https:// base URL)";
+}
+
+httplib::Headers auth_headers(const Endpoint& endpoint) {
+    httplib::Headers headers;
+    if (!endpoint.api_key.empty()) {
+        headers.emplace("Authorization", "Bearer " + endpoint.api_key);
+    }
+    return headers;
+}
+
+std::string chat_path(const Endpoint& endpoint) {
+    return endpoint.path_prefix + "/chat/completions";
 }
 
 json build_body(const std::string& prompt,
@@ -56,6 +69,12 @@ json build_body(const std::string& prompt,
 
 }  // namespace
 
+Endpoint default_endpoint() {
+    Endpoint endpoint;
+    endpoint.api_key = api_key();
+    return endpoint;
+}
+
 bool configured() {
     return !api_key().empty();
 }
@@ -64,35 +83,45 @@ AskResult ask(const std::string& prompt,
               const std::string& system,
               const std::string& model,
               int timeout_ms) {
+    return ask(prompt, system, model, timeout_ms, default_endpoint());
+}
+
+AskResult ask(const std::string& prompt,
+              const std::string& system,
+              const std::string& model,
+              int timeout_ms,
+              const Endpoint& endpoint) {
     AskResult result;
-    std::string key = api_key();
-    if (key.empty()) {
-        result.error_message = "openai: OPENAI_API_KEY not set";
+    if (endpoint.key_required && endpoint.api_key.empty()) {
+        result.error_message = endpoint.label + ": " + endpoint.missing_key_message;
+        return result;
+    }
+    if (std::string refused = key_transport_error(endpoint); !refused.empty()) {
+        result.error_message = refused;
         return result;
     }
 
-    auto& cli = client_for_thread(timeout_ms);
-    httplib::Headers headers = {{"Authorization", "Bearer " + key}};
+    auto& cli = loomai::client_for(endpoint.base_url, timeout_ms);
     auto body = build_body(prompt, system, model, /*stream=*/false);
 
-    auto res = cli.Post("/v1/chat/completions", headers, body.dump(), "application/json");
+    auto res = cli.Post(chat_path(endpoint), auth_headers(endpoint), body.dump(), "application/json");
     if (!res) {
-        result.error_message = "openai: " + httplib::to_string(res.error());
+        result.error_message = endpoint.label + ": " + httplib::to_string(res.error());
         return result;
     }
 
     auto parsed = json::parse(res->body, nullptr, false);
     if (parsed.is_discarded()) {
         result.error_message =
-            "openai: invalid JSON response (HTTP " + std::to_string(res->status) + ")";
+            endpoint.label + ": invalid JSON response (HTTP " + std::to_string(res->status) + ")";
         return result;
     }
     if (parsed.contains("error")) {
-        result.error_message = "openai: " + error_text(parsed["error"]);
+        result.error_message = endpoint.label + ": " + error_text(parsed["error"]);
         return result;
     }
     if (res->status != 200) {
-        result.error_message = "openai: HTTP " + std::to_string(res->status) + ": " + res->body;
+        result.error_message = endpoint.label + ": HTTP " + std::to_string(res->status) + ": " + res->body;
         return result;
     }
 
@@ -114,12 +143,23 @@ std::string ask_stream(const std::string& prompt,
                         const std::string& model,
                         int timeout_ms,
                         const std::function<void(const std::string&)>& on_delta) {
-    std::string key = api_key();
-    if (key.empty()) {
-        return "openai: OPENAI_API_KEY not set";
+    return ask_stream(prompt, system, model, timeout_ms, default_endpoint(), on_delta);
+}
+
+std::string ask_stream(const std::string& prompt,
+                        const std::string& system,
+                        const std::string& model,
+                        int timeout_ms,
+                        const Endpoint& endpoint,
+                        const std::function<void(const std::string&)>& on_delta) {
+    if (endpoint.key_required && endpoint.api_key.empty()) {
+        return endpoint.label + ": " + endpoint.missing_key_message;
+    }
+    if (std::string refused = key_transport_error(endpoint); !refused.empty()) {
+        return refused;
     }
 
-    auto& cli = client_for_thread(timeout_ms);
+    auto& cli = loomai::client_for(endpoint.base_url, timeout_ms);
     auto body = build_body(prompt, system, model, /*stream=*/true);
 
     std::string buffer;
@@ -129,9 +169,11 @@ std::string ask_stream(const std::string& prompt,
 
     httplib::Request req;
     req.method = "POST";
-    req.path = "/v1/chat/completions";
+    req.path = chat_path(endpoint);
     req.set_header("Content-Type", "application/json");
-    req.set_header("Authorization", "Bearer " + key);
+    for (const auto& header : auth_headers(endpoint)) {
+        req.set_header(header.first.c_str(), header.second.c_str());
+    }
     req.body = body.dump();
     req.content_receiver = [&](const char* data, size_t len, uint64_t,
                                 uint64_t) -> bool {
@@ -160,7 +202,7 @@ std::string ask_stream(const std::string& prompt,
             if (obj.is_discarded()) continue;
 
             if (obj.contains("error")) {
-                stream_error = "openai: " + error_text(obj["error"]);
+                stream_error = endpoint.label + ": " + error_text(obj["error"]);
                 return false;
             }
             auto choices = obj.value("choices", json::array());
@@ -174,7 +216,7 @@ std::string ask_stream(const std::string& prompt,
             }
         }
         if (buffer.size() > kMaxLineBufferBytes) {
-            stream_error = "openai: streaming response line exceeded " +
+            stream_error = endpoint.label + ": streaming response line exceeded " +
                             std::to_string(kMaxLineBufferBytes) + " bytes without a newline";
             return false;
         }
@@ -187,7 +229,7 @@ std::string ask_stream(const std::string& prompt,
         return stream_error;
     }
     if (!res) {
-        return "openai: " + httplib::to_string(res.error());
+        return endpoint.label + ": " + httplib::to_string(res.error());
     }
     // A fatal error body has no guaranteed trailing newline (unlike a
     // well-formed SSE/NDJSON stream, which always ends each line with one),
@@ -202,10 +244,10 @@ std::string ask_stream(const std::string& prompt,
     if (!got_content) {
         auto recovered = recover_error_body(non_data_lines);
         if (recovered && recovered->contains("error")) {
-            return "openai: " + error_text((*recovered)["error"]);
+            return endpoint.label + ": " + error_text((*recovered)["error"]);
         }
         if (res->status != 200) {
-            return "openai: HTTP " + std::to_string(res->status) + ": " + res->body;
+            return endpoint.label + ": HTTP " + std::to_string(res->status) + ": " + res->body;
         }
     }
     return "";

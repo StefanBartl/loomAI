@@ -48,6 +48,11 @@ Status update_settings(const nlohmann::json& patch);
 // Copy of the whole document (settings plus whatever other modules store).
 nlohmann::json snapshot();
 
+// Runs `read` on the live document while holding the lock, without copying it.
+// Use this on hot paths (resolving a model per request); `read` must be quick and
+// must not call back into this module.
+void inspect(const std::function<void(const nlohmann::json&)>& read);
+
 // Lets another module (the custom model list) edit the document under the same
 // lock and the same atomic write. `edit` works on a copy; it is persisted only
 // if it returns an ok status.
