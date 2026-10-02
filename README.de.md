@@ -7,7 +7,25 @@ dort `lua/ai/providers/loomai.lua`).
 
 *[English version](README.md)*
 
-## Installieren
+## loomAI herunterladen
+
+[**Neuestes Release herunterladen**](https://github.com/StefanBartl/loomAI/releases/latest)
+-- `loomai-setup-<version>-x64.exe`, ein Windows-Installer, ohne Compiler oder
+MSYS2. Er installiert für den aktuellen Benutzer (keine Administratorrechte),
+legt einen Startmenü-Eintrag an und kann optional den Befehl `loomai` in den
+`PATH` aufnehmen. Start über das Startmenü oder mit `loomai`; das Dashboard
+läuft dann auf `http://127.0.0.1:8080/`. Deinstallation über *Einstellungen ->
+Apps*.
+
+Der Installer ist nicht codesigniert, Windows SmartScreen kann deshalb warnen
+("Weitere Informationen", dann "Trotzdem ausführen"). Jedes Release enthält
+außerdem eine `.sha256`-Datei, um den Download mit `Get-FileHash` zu prüfen.
+Gebaut von [`.github/workflows/release.yml`](.github/workflows/release.yml)
+aus einem gepushten Tag `vX.Y.Z` und dort vor der Freigabe durch Installieren,
+Starten und Deinstallieren geprüft. Unter Linux/macOS oder zum Selbstbauen die
+Skripte unten verwenden.
+
+## Aus dem Quellcode installieren
 
 Die Setup-Skripte erledigen alles Folgende in einem Rutsch: Voraussetzungen
 prüfen, die beiden Header-only-Abhängigkeiten holen (feste Versionen,

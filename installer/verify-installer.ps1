@@ -1,0 +1,160 @@
+<#
+.SYNOPSIS
+    Installs a built loomai-setup-*.exe silently, checks the installed copy and
+    uninstalls it again.
+
+.DESCRIPTION
+    Used by .github/workflows/release.yml so that a release is only offered
+    after the installer itself has been proven: files in place, user PATH entry
+    added (and its other entries untouched), the launcher starts the server,
+    GET /health answers with a minimal PATH (so no MinGW on PATH can hide a
+    missing DLL), and the uninstaller removes the files and puts the user PATH
+    entries back as they were.
+
+    This really installs and edits the user PATH of whoever runs it, so it
+    refuses to run outside CI unless -Force is given.
+
+.PARAMETER Setup
+    Path to loomai-setup-<version>-x64.exe.
+
+.PARAMETER WorkDir
+    Scratch directory the installer installs into. Default: $env:RUNNER_TEMP\verify-install.
+
+.PARAMETER Force
+    Run outside CI.
+#>
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$Setup,
+    [string]$WorkDir = (Join-Path $env:RUNNER_TEMP 'verify-install'),
+    [switch]$Force
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+if (-not $Force -and $env:CI -ne 'true') {
+    throw 'Refusing to run outside CI: this installs the setup for real and edits the user PATH. Pass -Force to override.'
+}
+
+$Setup = (Resolve-Path -LiteralPath $Setup).Path
+$InstallDir = Join-Path $WorkDir 'loomAI'
+$SetupLog = Join-Path $WorkDir 'setup.log'
+New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+$Port = 8080
+
+function Write-Ok([string]$Text) { Write-Host "  [ OK ] $Text" -ForegroundColor Green }
+
+function Assert-That([bool]$Condition, [string]$Message) {
+    if (-not $Condition) { throw "verification failed: $Message" }
+}
+
+# Raw (unexpanded) user PATH, '' if there is none -- the same view the installer has.
+function Get-RawUserPath {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+    if (-not $key) { return '' }
+    try {
+        return [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    } finally {
+        $key.Close()
+    }
+}
+
+function Get-NormalizedUserPath {
+    $entries = @((Get-RawUserPath) -split ';' | Where-Object { $_ })
+    return $entries -join ';'
+}
+
+function Wait-ForHealth {
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+        try {
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2
+            if ($health.status -eq 'ready') { return $health }
+        } catch { }
+    }
+    return $null
+}
+
+function Stop-InstalledServer {
+    $exe = Join-Path $InstallDir 'app\loomai.exe'
+    Get-Process loomai -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -ieq $exe } |
+        Stop-Process -Force
+}
+
+$pathBefore = Get-RawUserPath
+$entriesBefore = Get-NormalizedUserPath
+$installed = $false
+try {
+    Write-Host "`n==> Installing $(Split-Path -Leaf $Setup) silently to $InstallDir"
+    $install = Start-Process -FilePath $Setup -Wait -PassThru -ArgumentList @(
+        '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
+        "/DIR=`"$InstallDir`"", '/TASKS=addtopath', "/LOG=`"$SetupLog`""
+    )
+    Assert-That ($install.ExitCode -eq 0) "installer exited with code $($install.ExitCode)"
+    $installed = $true
+    Write-Ok 'installer exited with 0'
+
+    Write-Host "`n==> Checking the installed files"
+    foreach ($rel in @('app\loomai.exe', 'app\dashboard\index.html', 'loomai.cmd', 'unins000.exe')) {
+        Assert-That (Test-Path (Join-Path $InstallDir $rel)) "missing $rel"
+    }
+    Assert-That (@(Get-ChildItem (Join-Path $InstallDir 'app') -Filter *.dll).Count -gt 0) 'no runtime DLLs next to loomai.exe'
+    Write-Ok 'binary, dashboard, runtime DLLs, launcher and uninstaller are in place'
+
+    Write-Host "`n==> Checking the user PATH (task addtopath)"
+    $pathInstalled = Get-RawUserPath
+    $entries = @($pathInstalled -split ';' | Where-Object { $_ })
+    Assert-That (@($entries | Where-Object { $_.TrimEnd('\') -ieq $InstallDir.TrimEnd('\') }).Count -eq 1) 'install directory is not on the user PATH exactly once'
+    if ($pathBefore) {
+        Assert-That ($pathInstalled.StartsWith($pathBefore)) 'the installer changed existing user PATH entries'
+    }
+    Write-Ok 'install directory added, existing entries untouched'
+
+    Write-Host "`n==> Starting the server through the launcher (minimal PATH, foreign working directory)"
+    $savedPath = $env:Path
+    $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
+    try {
+        $null = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -WindowStyle Hidden `
+            -WorkingDirectory $env:TEMP -ArgumentList '/c', "`"$(Join-Path $InstallDir 'loomai.cmd')`""
+    } finally {
+        $env:Path = $savedPath
+    }
+    $health = Wait-ForHealth
+    Assert-That ($null -ne $health) 'the installed server did not answer /health within 20 s'
+    Write-Ok "/health: status=$($health.status)"
+    $dashboard = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/" -TimeoutSec 5
+    Assert-That ($dashboard.StatusCode -eq 200) "dashboard answered $($dashboard.StatusCode)"
+    Write-Ok 'dashboard served (the launcher started the server from the right directory)'
+} catch {
+    if (Test-Path $SetupLog) {
+        Write-Host '--- installer log (tail) ---'
+        Get-Content $SetupLog -Tail 25
+    }
+    throw
+} finally {
+    Stop-InstalledServer
+}
+
+if ($installed) {
+    Write-Host "`n==> Uninstalling"
+    $uninstaller = Join-Path $InstallDir 'unins000.exe'
+    # The uninstaller copies itself to %TEMP% and exits at once, so -Wait does
+    # not wait for the real work: poll for the result instead.
+    $null = Start-Process -FilePath $uninstaller -Wait -PassThru -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    while ((Test-Path (Join-Path $InstallDir 'app')) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    Assert-That (-not (Test-Path (Join-Path $InstallDir 'app'))) 'the uninstaller left the app directory behind'
+    Assert-That (-not (Test-Path (Join-Path $InstallDir 'loomai.cmd'))) 'the uninstaller left the launcher behind'
+    Write-Ok 'files removed'
+    # Compare entry lists, not raw text: removing our entry may drop an empty
+    # trailing ';' that was there before, which changes nothing for Windows.
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ((Get-NormalizedUserPath) -cne $entriesBefore -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    Assert-That ((Get-NormalizedUserPath) -ceq $entriesBefore) 'the user PATH entries were not restored'
+    Write-Ok 'user PATH entries restored (every other entry verbatim, %VAR% references included)'
+}
+
+Write-Host "`nInstaller verified." -ForegroundColor Green

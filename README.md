@@ -7,7 +7,24 @@ integrations (see [`ai.nvim`](../ai.nvim)'s `loomai` provider, there
 
 *[Deutsche Version](README.de.md)*
 
-## Installing
+## Get loomAI
+
+[**Download the latest release**](https://github.com/StefanBartl/loomAI/releases/latest)
+-- `loomai-setup-<version>-x64.exe`, a Windows installer, no compiler or MSYS2
+needed. It installs for the current user (no administrator rights), adds a
+Start-menu entry, and can optionally put the `loomai` command on your `PATH`.
+Start it from the Start menu or with `loomai`; it serves the dashboard on
+`http://127.0.0.1:8080/`. Uninstall via *Settings -> Apps*.
+
+The installer is not code-signed, so Windows SmartScreen may warn ("More info",
+then "Run anyway"). Each release also carries a `.sha256` file to check the
+download against `Get-FileHash`. Built by
+[`.github/workflows/release.yml`](.github/workflows/release.yml) from a pushed
+`vX.Y.Z` tag, and verified there by installing, starting and uninstalling it
+before it is offered. On Linux/macOS, or to build it yourself, use the scripts
+below.
+
+## Installing from source
 
 The setup scripts do everything below in one go: check the prerequisites,
 fetch the two header-only dependencies (pinned versions, SHA-256 verified),

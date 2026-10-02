@@ -1,0 +1,163 @@
+# Builds the Windows installer (loomai-setup-<version>-x64.exe) and attaches it,
+# plus its SHA-256, to a GitHub Release -- so "get loomAI" means "open Releases
+# and download one file" instead of "install MSYS2 and run scripts/setup.ps1".
+#
+# Cutting a release (the same shape as docmap-desktop's):
+#
+#   1. CI-green main, then tag and push:
+#        git tag -a v0.1.0 -m "what is in this release"
+#        git push origin v0.1.0
+#   2. This workflow builds, verifies and publishes a DRAFT release. A draft on
+#      purpose: a green build is not the same guarantee as someone having
+#      installed the result, so download it, run it, then publish:
+#        gh release download v0.1.0 --pattern "*.exe" --dir .
+#        gh release edit v0.1.0 --draft=false
+#   3. Something wrong? Delete draft and tag together, fix, start over:
+#        gh release delete v0.1.0 --yes --cleanup-tag
+#
+# A pushed tag must be exactly vX.Y.Z (the installer version is numeric).
+# Running the workflow by hand (Actions -> Release -> Run workflow, or
+# `gh workflow run release.yml`) is a dry run: it builds and verifies the
+# installer from the chosen branch and uploads it as a workflow artifact, and
+# never creates a release.
+#
+# What "verifies" means: scripts/setup.ps1 builds and stages the app and smoke
+# tests it, Inno Setup packs that stage, and installer/verify-installer.ps1
+# installs the result silently on the runner, starts it through the launcher
+# with a minimal PATH, checks GET /health and the dashboard, uninstalls and
+# checks that the user PATH is back as it was. Only then is anything offered.
+#
+# The installer is not code-signed, so Windows SmartScreen may warn; the
+# release notes say so and publish the SHA-256.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: work out the version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            if ($env:GITHUB_REF_NAME -notmatch '^v(\d+\.\d+\.\d+)$') {
+              throw "tag '$env:GITHUB_REF_NAME' is not of the form vX.Y.Z"
+            }
+            $version = $Matches[1]
+          } else {
+            $version = '0.0.0' # dry run, never published
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "version: $version"
+
+      # A dedicated MSYS2/MinGW-w64 toolchain: the runner image already has
+      # several g++ on PATH (Strawberry Perl, C:\mingw64), none with OpenSSL.
+      # setup.ps1 is pointed at this one with -Msys2Root, which wins over PATH.
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-openssl
+
+      # The same script a developer runs by hand: checks, vendors the pinned
+      # headers, builds, installs into a staging prefix, smoke-tests it.
+      - name: build and stage with scripts/setup.ps1
+        shell: pwsh
+        run: |
+          .\scripts\setup.ps1 `
+            -Msys2Root '${{ steps.msys2.outputs.msys2-location }}' `
+            -Prefix "$env:RUNNER_TEMP\stage" `
+            -BuildType Release
+
+      - name: make sure Inno Setup is installed
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed ($LASTEXITCODE)" }
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: build the installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          & $env:ISCC /Q "/DAppVersion=$env:VERSION" "/DStageDir=$env:RUNNER_TEMP\stage" "/O$PWD\dist" installer\loomai.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          $setup = Get-Item "dist\loomai-setup-$env:VERSION-x64.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup.FullName).Hash.ToLowerInvariant()
+          # sha256sum format ("<hash> *<name>"), LF line ending, no BOM.
+          [IO.File]::WriteAllText("$($setup.FullName).sha256", "$hash *$($setup.Name)`n", (New-Object Text.UTF8Encoding $false))
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: verify the installer (install, run, uninstall)
+        shell: pwsh
+        run: .\installer\verify-installer.ps1 -Setup "dist\loomai-setup-$env:VERSION-x64.exe"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: loomai-setup
+          path: dist/*
+          retention-days: 7
+
+  # Only for a pushed tag, and the only job that may write to the repository.
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: loomai-setup
+          path: dist
+      - name: create the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          ls -la dist
+          cat > release-notes.md <<EOF
+          ## Download
+
+          **\`loomai-setup-${version}-x64.exe\`** - Windows installer (x64). Run it; it installs
+          for the current user, no administrator rights needed. The optional "add to PATH" step
+          adds the \`loomai\` command to new terminals. Start loomAI from the Start menu or with
+          \`loomai\`; it listens on \`127.0.0.1:8080\`.
+
+          The installer is not code-signed, so Windows SmartScreen may show "Windows protected
+          your PC" - choose *More info*, then *Run anyway*. To check the download first, compare
+          \`Get-FileHash .\\loomai-setup-${version}-x64.exe\` with the SHA-256 in
+          \`loomai-setup-${version}-x64.exe.sha256\`.
+
+          Cloud backends need their API keys in the environment (\`OPENAI_API_KEY\`,
+          \`ANTHROPIC_API_KEY\`, \`GEMINI_API_KEY\`); the installer never stores secrets. See the
+          README for the rest. Linux and macOS: build with \`scripts/setup.sh\`.
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft --verify-tag \
+              --title "loomAI $TAG" \
+              --notes-file release-notes.md
+          fi

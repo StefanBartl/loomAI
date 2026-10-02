@@ -26,7 +26,8 @@
     CMake build type. Default: Release.
 
 .PARAMETER Msys2Root
-    MSYS2 installation. Default: C:\msys64. Ignored if g++ is already on PATH.
+    MSYS2 installation. Default: C:\msys64, used only if no g++ is on PATH.
+    Passed explicitly, it takes precedence over any g++ on PATH.
 
 .PARAMETER InstallDeps
     Install the missing MSYS2 packages (gcc, make, openssl) via pacman.
@@ -45,8 +46,8 @@
     Do not start the installed server for the final /health check.
 
 .PARAMETER AddToPath
-    Add <Prefix> to the user PATH (idempotent; other entries are kept
-    byte-for-byte, %VAR% references included).
+    Add <Prefix> to the user PATH (idempotent; every other entry is kept
+    verbatim, %VAR% references included).
 
 .PARAMETER Uninstall
     Remove <Prefix>\app and <Prefix>\loomai.cmd (and <Prefix> itself if that
@@ -75,6 +76,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+$Msys2RootExplicit = $PSBoundParameters.ContainsKey('Msys2Root')
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $BuildDir = Join-Path $RepoRoot 'build'
 # Resolve against PowerShell's location, not the .NET process directory.
@@ -118,10 +120,18 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments) {
 }
 
 function Find-Mingw64Bin {
+    $fromRoot = Join-Path $Msys2Root 'mingw64\bin'
+    # An explicit -Msys2Root is a decision, not a hint: CI images carry several
+    # g++ (Strawberry Perl, C:\mingw64) without OpenSSL, and none of them may
+    # win over the toolchain the caller pointed at.
+    if ($Msys2RootExplicit) {
+        if (Test-Path (Join-Path $fromRoot 'g++.exe')) { return $fromRoot }
+        return $null
+    }
     $candidates = @()
     $gpp = Get-Command g++ -ErrorAction SilentlyContinue
     if ($gpp) { $candidates += Split-Path -Parent $gpp.Source }
-    $candidates += (Join-Path $Msys2Root 'mingw64\bin')
+    $candidates += $fromRoot
     foreach ($dir in $candidates) {
         if (Test-Path (Join-Path $dir 'g++.exe')) { return $dir }
     }
