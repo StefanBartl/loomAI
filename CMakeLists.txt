@@ -16,6 +16,15 @@ endif()
 add_library(third_party_headers INTERFACE)
 target_include_directories(third_party_headers INTERFACE third_party)
 
+# Logic that needs no HTTP stack (settings store, secret store, model registry),
+# kept in its own library so the unit tests can link it without OpenSSL or
+# cpp-httplib.
+add_library(loomai_core STATIC
+    src/config.cpp
+)
+target_include_directories(loomai_core PUBLIC src)
+target_link_libraries(loomai_core PUBLIC third_party_headers)
+
 add_executable(loomai
     src/main.cpp
     src/ollama_client.cpp
@@ -24,7 +33,7 @@ add_executable(loomai
     src/gemini_client.cpp
 )
 target_include_directories(loomai PRIVATE src)
-target_link_libraries(loomai PRIVATE third_party_headers)
+target_link_libraries(loomai PRIVATE loomai_core third_party_headers)
 
 # The cloud ModelRouter backends (openai/anthropic/gemini) talk to real
 # HTTPS endpoints, unlike ollama_client's localhost-only HTTP -- cpp-httplib
@@ -42,6 +51,19 @@ if(WIN32)
 else()
     find_package(Threads REQUIRED)
     target_link_libraries(loomai PRIVATE Threads::Threads)
+endif()
+
+# Unit tests (plain asserts, no framework): `ctest --test-dir build`. The HTTP
+# API is covered separately by the Node tests under tests/.
+option(LOOMAI_BUILD_TESTS "Build the unit tests" ON)
+if(LOOMAI_BUILD_TESTS)
+    enable_testing()
+    add_executable(loomai_tests
+        tests/unit/test_main.cpp
+        tests/unit/test_config.cpp
+    )
+    target_link_libraries(loomai_tests PRIVATE loomai_core)
+    add_test(NAME loomai_unit COMMAND loomai_tests)
 endif()
 
 # Flat install layout: the server mounts "./dashboard" relative to its working

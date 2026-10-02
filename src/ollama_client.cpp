@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 
+#include "config.hpp"
 #include "httplib.h"
 #include "nlohmann/json.hpp"
 
@@ -18,11 +19,6 @@ namespace {
 // Most relevant here since LOOMAI_OLLAMA_HOST is user-configurable and can
 // point at a non-local host, unlike the hardcoded cloud-provider hosts.
 constexpr size_t kMaxLineBufferBytes = 1 << 20;  // 1 MiB
-
-std::string env_or(const char* name, const std::string& fallback) {
-    const char* value = std::getenv(name);
-    return (value && *value) ? std::string(value) : fallback;
-}
 
 // One persistent, keep-alive client per worker thread instead of a new TCP
 // connection on every /ask and /ask/stream request. main.cpp's httplib
@@ -58,8 +54,11 @@ json build_request(const std::string& prompt,
 
 }  // namespace
 
+// Both come from the config store, which applies LOOMAI_OLLAMA_HOST /
+// LOOMAI_DEFAULT_MODEL first, then config.json (settings dialog), then the
+// built-in default.
 std::string host() {
-    std::string raw = env_or("LOOMAI_OLLAMA_HOST", "http://127.0.0.1:11434");
+    std::string raw = config::effective("ollama_host");
     if (raw.rfind("http://", 0) != 0 && raw.rfind("https://", 0) != 0) {
         raw = "http://" + raw;
     }
@@ -67,7 +66,7 @@ std::string host() {
 }
 
 std::string default_model() {
-    return env_or("LOOMAI_DEFAULT_MODEL", "llama3.1:8b-q5_K_M");
+    return config::effective("default_model");
 }
 
 AskResult ask(const std::string& prompt,
