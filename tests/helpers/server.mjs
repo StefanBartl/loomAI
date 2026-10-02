@@ -87,6 +87,9 @@ export async function startServer({ env = {}, args = [], port, configDir } = {})
       LOOMAI_CONFIG_DIR: usedConfigDir,
       LOOMAI_DASHBOARD_DIR: path.join(repoRoot, "dashboard"),
       LOOMAI_OLLAMA_HOST: "http://127.0.0.1:9", // nothing listens on the discard port
+      // Keys saved by a test go into <config dir>/secrets.json, never into the
+      // developer's real Windows Credential Manager.
+      LOOMAI_SECRET_BACKEND: "file",
       OPENAI_API_KEY: "",
       ANTHROPIC_API_KEY: "",
       GEMINI_API_KEY: "",

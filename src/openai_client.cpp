@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include "httplib.h"
+#include "secrets.hpp"
 
 namespace loomai::openai {
 
@@ -16,13 +17,9 @@ namespace {
 // for the life of the request. Mirrors gemini_client.cpp's kMaxLineBufferBytes.
 constexpr size_t kMaxLineBufferBytes = 1 << 20;  // 1 MiB
 
-std::string env_or(const char* name, const std::string& fallback) {
-    const char* value = std::getenv(name);
-    return (value && *value) ? std::string(value) : fallback;
-}
-
+// Environment variable first, then the key saved from the settings dialog.
 std::string api_key() {
-    return env_or("OPENAI_API_KEY", "");
+    return secrets::get("OPENAI_API_KEY");
 }
 
 // One persistent, keep-alive client (TCP + TLS session) per worker thread
