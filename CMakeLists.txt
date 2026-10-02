@@ -43,3 +43,10 @@ else()
     find_package(Threads REQUIRED)
     target_link_libraries(loomai PRIVATE Threads::Threads)
 endif()
+
+# Flat install layout: the server mounts "./dashboard" relative to its working
+# directory, so the binary and the dashboard folder must sit side by side and
+# the server must be started from there. scripts/setup.ps1 and scripts/setup.sh
+# install into <prefix>/app and write a launcher that does the cd.
+install(TARGETS loomai RUNTIME DESTINATION .)
+install(DIRECTORY dashboard DESTINATION .)

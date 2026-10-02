@@ -7,6 +7,40 @@ integrations (see [`ai.nvim`](../ai.nvim)'s `loomai` provider, there
 
 *[Deutsche Version](README.de.md)*
 
+## Installing
+
+The setup scripts do everything below in one go: check the prerequisites,
+fetch the two header-only dependencies (pinned versions, SHA-256 verified),
+build, install, and smoke-test the installed copy against `GET /health`.
+
+Windows (MSYS2/MinGW-w64; CMake >= 3.20 must be installed already):
+
+```powershell
+.\scripts\setup.ps1 -InstallDeps -AddToPath
+```
+
+`-InstallDeps` pulls gcc, make and OpenSSL via MSYS2's `pacman`, `-AddToPath`
+adds the install directory to your user `PATH`. Further switches: `-Prefix`
+(default `%LOCALAPPDATA%\loomai`), `-BuildType`, `-Clean`, `-CheckOnly`,
+`-SkipInstall`, `-SkipSmokeTest`, `-Uninstall`. Run
+`Get-Help .\scripts\setup.ps1 -Detailed` for details.
+
+Linux/macOS (CMake >= 3.20, a C++17 compiler, curl, OpenSSL dev files):
+
+```bash
+scripts/setup.sh
+```
+
+Options: `--prefix`, `--bin-dir`, `--build-type`, `--clean`, `--check`,
+`--skip-install`, `--skip-smoke-test`, `--uninstall` (see `--help`).
+
+The server serves `./dashboard` relative to its working directory, so the
+installed layout is `<prefix>/app` (binary, dashboard, on Windows the runtime
+DLLs) plus a launcher -- `<prefix>\loomai.cmd` on Windows, `~/.local/bin/loomai`
+elsewhere -- that starts it from the right directory. Start loomAI with the
+launcher, not with `app/loomai` directly. The scripts never write API keys;
+set them in your environment (see "Running").
+
 ## Building
 
 Dependencies are header-only and vendored locally into `third_party/` (not

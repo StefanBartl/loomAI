@@ -7,6 +7,41 @@ dort `lua/ai/providers/loomai.lua`).
 
 *[English version](README.md)*
 
+## Installieren
+
+Die Setup-Skripte erledigen alles Folgende in einem Rutsch: Voraussetzungen
+prüfen, die beiden Header-only-Abhängigkeiten holen (feste Versionen,
+SHA-256-geprüft), bauen, installieren und die installierte Kopie per
+`GET /health` testen.
+
+Windows (MSYS2/MinGW-w64; CMake >= 3.20 muss schon installiert sein):
+
+```powershell
+.\scripts\setup.ps1 -InstallDeps -AddToPath
+```
+
+`-InstallDeps` installiert gcc, make und OpenSSL über MSYS2s `pacman`,
+`-AddToPath` trägt das Installationsverzeichnis in den User-`PATH` ein. Weitere
+Schalter: `-Prefix` (Standard `%LOCALAPPDATA%\loomai`), `-BuildType`, `-Clean`,
+`-CheckOnly`, `-SkipInstall`, `-SkipSmokeTest`, `-Uninstall`. Details:
+`Get-Help .\scripts\setup.ps1 -Detailed`.
+
+Linux/macOS (CMake >= 3.20, C++17-Compiler, curl, OpenSSL-Dev-Dateien):
+
+```bash
+scripts/setup.sh
+```
+
+Optionen: `--prefix`, `--bin-dir`, `--build-type`, `--clean`, `--check`,
+`--skip-install`, `--skip-smoke-test`, `--uninstall` (siehe `--help`).
+
+Der Server liefert `./dashboard` relativ zu seinem Arbeitsverzeichnis aus,
+deshalb ist das installierte Layout `<prefix>/app` (Binary, Dashboard, unter
+Windows die Runtime-DLLs) plus ein Launcher -- `<prefix>\loomai.cmd` unter
+Windows, sonst `~/.local/bin/loomai` --, der ihn aus dem richtigen Verzeichnis
+startet. loomAI also über den Launcher starten, nicht `app/loomai` direkt. Die
+Skripte schreiben nie API-Keys; die kommen in die Umgebung (siehe "Starten").
+
 ## Bauen
 
 Abhängigkeiten sind Header-only und werden lokal in `third_party/` abgelegt
