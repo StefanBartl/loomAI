@@ -8,7 +8,7 @@
 
 // Shared result shape and SSE helpers for every backend client (ollama,
 // openai, anthropic, gemini) that main.cpp's /ask and /ask/stream handlers
-// dispatch to by model-name prefix -- see wkdbook-loomai/Guides/
+// dispatch to by model-name prefix -- see wkdbook-native/loomai/Guides/
 // ki-agenten-framework-architektur.md (private repo) and the ai.nvim
 // handover's loomAI ModelRouter scoping for the reasoning behind the
 // prefix-based router.
