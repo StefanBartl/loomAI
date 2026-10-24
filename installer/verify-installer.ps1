@@ -89,6 +89,13 @@ function Stop-InstalledServer {
     Get-Process loomai -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -ieq $exe } |
         Stop-Process -Force
+    # The launcher (cmd.exe running loomai.cmd) is a process of its own with the app directory as its working
+    # directory. When its server is closed by a break, as the setup does to update a running one, cmd asks
+    # "Terminate batch job (Y/N)?" in its hidden window and stays: it would keep the uninstaller from
+    # deleting the directory (error 32 in the uninstaller log).
+    Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" |
+        Where-Object { $_.CommandLine -and $_.CommandLine.Contains($InstallDir) } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
 # One installation of the setup into $InstallDir: through the install script of the release-kit when there is
