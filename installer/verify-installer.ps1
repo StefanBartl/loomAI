@@ -213,8 +213,10 @@ if ($installed) {
         # What is left, and what the uninstaller says about it.
         Write-Host '--- left in the install directory ---'
         Get-ChildItem -LiteralPath $InstallDir -Recurse -Force | ForEach-Object { $_.FullName }
-        Write-Host '--- loomai processes ---'
-        Get-Process loomai -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id) $($_.Path)" }
+        Write-Host '--- processes that name loomai or the install directory ---'
+        Get-CimInstance Win32_Process |
+            Where-Object { $_.CommandLine -and ($_.CommandLine -match 'loomai' -or $_.CommandLine.Contains($InstallDir)) } |
+            ForEach-Object { "$($_.ProcessId) $($_.Name) parent=$($_.ParentProcessId) $($_.CommandLine)" }
         if (Test-Path $UninstallLog) {
             Write-Host '--- uninstaller log (tail) ---'
             Get-Content $UninstallLog -Tail 40
