@@ -46,7 +46,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
 
       - name: work out the version
         shell: pwsh
@@ -65,7 +67,7 @@ jobs:
       # A dedicated MSYS2/MinGW-w64 toolchain: the runner image already has
       # several g++ on PATH (Strawberry Perl, C:\mingw64), none with OpenSSL.
       # setup.ps1 is pointed at this one with -Msys2Root, which wins over PATH.
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         id: msys2
         with:
           msystem: MINGW64
@@ -108,7 +110,7 @@ jobs:
         shell: pwsh
         run: .\installer\verify-installer.ps1 -Setup "dist\loomai-setup-$env:VERSION-x64.exe"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: loomai-setup
           path: dist/*
@@ -123,7 +125,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: loomai-setup
           path: dist

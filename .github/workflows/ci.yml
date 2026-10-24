@@ -1,0 +1,102 @@
+# The checks of every push to main and every pull request: the same build the release makes, then the tests.
+#
+#   windows   scripts/setup.ps1 (MSYS2 / MinGW-w64): vendors the two header-only dependencies, builds, installs
+#             into a throw-away prefix and smoke-tests the installed copy against GET /health; then the unit
+#             tests (ctest) and the API tests (Node), which start the real binary on a free port.
+#   linux     the same with scripts/setup.sh.
+#   hygiene   no control or invisible character in a tracked text file (tools/check-control-chars.py).
+#
+# The rolling build (rolling.yml) starts after a green run of this workflow on main, so what it publishes
+# has passed all of it. Actions are pinned by commit, the tag is in the comment; a job gets only the rights
+# it needs and no credentials stay in a checkout.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
+
+      # A dedicated MSYS2/MinGW-w64 toolchain: the runner image already has several g++ on PATH (Strawberry
+      # Perl, C:\mingw64), none with OpenSSL. setup.ps1 is pointed at this one with -Msys2Root, which wins
+      # over PATH.
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        id: msys2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-openssl
+
+      - name: build, install and smoke-test with scripts/setup.ps1
+        shell: pwsh
+        run: |
+          .\scripts\setup.ps1 `
+            -Msys2Root '${{ steps.msys2.outputs.msys2-location }}' `
+            -Prefix "$env:RUNNER_TEMP\stage" `
+            -BuildType Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The binary needs the runtime DLLs of the toolchain, which the install step copies beside the
+      # installed copy but not beside build/loomai.exe.
+      - name: unit tests (ctest)
+        shell: pwsh
+        run: |
+          $env:PATH = '${{ steps.msys2.outputs.msys2-location }}\mingw64\bin;' + $env:PATH
+          ctest --test-dir build --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: API tests (Node, the real binary)
+        shell: pwsh
+        run: |
+          $env:PATH = '${{ steps.msys2.outputs.msys2-location }}\mingw64\bin;' + $env:PATH
+          node --version
+          $tests = Get-ChildItem tests -Filter '*.test.mjs' | ForEach-Object { $_.FullName }
+          node --test @tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
+
+      - name: build tools and OpenSSL headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ curl libssl-dev
+
+      - name: build, install and smoke-test with scripts/setup.sh
+        run: bash scripts/setup.sh --prefix "$RUNNER_TEMP/loomai" --bin-dir "$RUNNER_TEMP/bin"
+
+      - name: unit tests (ctest)
+        run: ctest --test-dir build --output-on-failure
+
+      - name: API tests (Node, the real binary)
+        run: |
+          node --version
+          node --test tests/*.test.mjs
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          persist-credentials: false
+      # A control or invisible character in a tracked text file (a backspace in a path, a bidirectional
+      # override in source) is refused; the tool tests itself.
+      - run: python3 -m unittest discover -s tools -p "test_*.py"
+      - run: python3 tools/check-control-chars.py
