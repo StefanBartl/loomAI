@@ -129,3 +129,42 @@ jobs:
           windows-release-asset: loomai-setup-{version}-x64.exe
           windows-rolling-asset: loomai-setup-x64.exe
           notes-file: .github/rolling-notes.md
+
+  # What a user does, on what was just published: the stamped install.ps1 of `latest` is fetched from GitHub
+  # the way `irm | iex` does it, with the one difference that the runner is elevated (hence -AllowElevated, which
+  # the one-liner cannot pass), and it installs for real: URL, channel, asset name, SHA256SUMS and the silent
+  # setup. The installed server must answer /health; then the setup is taken away again. The build job proved
+  # the installer with the unstamped script of the same kit; this proves the stamp and the published files.
+  published:
+    needs: [prepare, publish]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install from latest, start, ask /health, uninstall
+        shell: pwsh
+        env:
+          URL: https://github.com/${{ github.repository }}/releases/download/latest/install.ps1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $text = Invoke-RestMethod -Uri $env:URL
+          & ([scriptblock]::Create($text)) -AllowElevated
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\loomAI'
+          if (-not (Test-Path (Join-Path $dir 'app\loomai.exe'))) { throw "no app\loomai.exe in $dir" }
+          $server = Start-Process -FilePath (Join-Path $dir 'app\loomai.exe') -WorkingDirectory (Join-Path $dir 'app') -PassThru -WindowStyle Hidden
+          try {
+            $health = $null
+            $deadline = [DateTime]::UtcNow.AddSeconds(20)
+            while ([DateTime]::UtcNow -lt $deadline -and -not $health) {
+              Start-Sleep -Milliseconds 500
+              try { $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/health' -TimeoutSec 2 } catch { }
+            }
+            if (-not $health -or $health.status -ne 'ready') { throw 'the installed server did not answer /health within 20 s' }
+            Write-Host "/health: status=$($health.status)"
+          } finally {
+            if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
+          }
+          $uninstaller = Join-Path $dir 'unins000.exe'
+          Start-Process -FilePath $uninstaller -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          $deadline = [DateTime]::UtcNow.AddSeconds(60)
+          while ((Test-Path (Join-Path $dir 'app')) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 500 }
+          if (Test-Path (Join-Path $dir 'app')) { throw 'the uninstaller left the app directory behind' }

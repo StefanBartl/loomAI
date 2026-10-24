@@ -10,8 +10,13 @@
 #   2. This workflow checks the tag, builds, verifies and publishes a DRAFT release. A draft on purpose: a
 #      green build is not the same guarantee as someone having installed the result, so download it, run
 #      it, then publish:
-#        gh release download v0.1.0 --pattern "*.exe" --dir .
+#        gh release download v0.1.0 --dir .        (the installer, install.ps1, SHA256SUMS)
+#        .\install.ps1 -File .\loomai-setup-0.1.0-x64.exe        (the script on the draft: the sums are
+#                                                                 found beside the file; the download path
+#                                                                 cannot reach a draft's files)
 #        gh release edit v0.1.0 --draft=false
+#      Update over a running server and the uninstall are tried by the build already; a person opens the
+#      result on a clean user account all the same.
 #   3. Something wrong? Delete draft and tag together, fix, start over:
 #        gh release delete v0.1.0 --yes --cleanup-tag
 #      A published release is never cut again: a mistake is fixed in the next patch version.
@@ -67,13 +72,12 @@ jobs:
         run: |
           set -eu
           tag="$GITHUB_REF_NAME"
-          case "$tag" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::the tag $tag is not vX.Y.Z"; exit 1 ;;
-          esac
-          case "${tag#v}" in
-            *[!0-9.]*) echo "::error::the tag $tag is not vX.Y.Z (the installer version is numeric)"; exit 1 ;;
-          esac
+          # Exactly vX.Y.Z: the installer version is numeric, and a tag like v1.2.3.4 would only fail
+          # later, on a Windows runner.
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$'; then
+            echo "::error::the tag $tag is not vX.Y.Z"
+            exit 1
+          fi
           # A release comes from main, never from a side branch.
           git fetch --quiet origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
@@ -85,9 +89,16 @@ jobs:
             echo "::error::no green ci run for $GITHUB_SHA: wait for it, or fix main, then tag again"
             exit 1
           fi
-          # A published release is never cut again: stop before anything is built.
-          if draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" && [ "$draft" != "true" ]; then
-            echo "::error::the release $tag is published: it is never cut again, make a patch release"
+          # A published release is never cut again: stop before anything is built. "No such release" is the
+          # good answer (a draft is invisible to this token, and fine); any other failure of gh is not
+          # taken for it.
+          if answer="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>&1)"; then
+            if [ "$answer" != "true" ]; then
+              echo "::error::the release $tag is published: it is never cut again, make a patch release"
+              exit 1
+            fi
+          elif ! printf '%s' "$answer" | grep -qi 'release not found'; then
+            echo "::error::cannot ask GitHub about the release $tag: $answer"
             exit 1
           fi
 

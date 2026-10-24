@@ -40,11 +40,23 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/StefanBartl/loomAI
 
 The script of a release installs exactly that release, the script of `latest`
 the rolling build ([`rolling.yml`](.github/workflows/rolling.yml), rebuilt
-after every green CI run on `main` and proven by installing, starting and
-uninstalling it, for trying what is new). Saved as a file, the script takes
-more: `-InstallArgs '/TASKS=addtopath'` puts the `loomai` command on your
-`PATH`, `-File <setup.exe>` installs a setup you already have. The scripts are
-the ones of appkit's
+after every green CI run on `main` and proven by installing, starting,
+updating and uninstalling it, for trying what is new). The line above installs
+without the "add to PATH" step, so the `loomai` command is not in new
+terminals; start loomAI from the Start menu. For the step, or any other
+argument of the script, use the form that takes arguments:
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/StefanBartl/loomAI/releases/download/latest/install.ps1))) -InstallArgs '/TASKS=addtopath'
+```
+
+Saved as a file, the script is run as `powershell -ExecutionPolicy Bypass -File
+.\install.ps1 -InstallArgs '/TASKS=addtopath'` (one value per `-File` command
+line: a list would arrive as one string; in a PowerShell session
+`-InstallArgs 'a','b'` is fine). `-File <setup.exe>` installs a setup you
+already have; its checksum then comes from `-Sums`, `-Sha256` or a
+`SHA256SUMS` beside it. Run the script again to repair or update (stop loomAI
+first if it is running). The scripts are the ones of appkit's
 [release-kit](https://github.com/StefanBartl/appkit/tree/main/release-kit),
 stamped for this app and the channel when they are attached. (v0.1.0 predates
 them and has no script.)

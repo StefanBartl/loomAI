@@ -42,11 +42,25 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/StefanBartl/loomAI
 
 Das Skript eines Releases installiert genau dieses Release, das von `latest`
 den Rolling-Build ([`rolling.yml`](.github/workflows/rolling.yml), nach jedem
-grünen CI-Lauf auf `main` neu gebaut und durch Installieren, Starten und
-Deinstallieren geprüft, zum Ausprobieren des Neuesten). Als Datei gespeichert
-nimmt das Skript mehr an: `-InstallArgs '/TASKS=addtopath'` nimmt den Befehl
-`loomai` in den `PATH` auf, `-File <setup.exe>` installiert ein vorhandenes
-Setup. Die Skripte sind die des
+grünen CI-Lauf auf `main` neu gebaut und durch Installieren, Starten,
+Aktualisieren und Deinstallieren geprüft, zum Ausprobieren des Neuesten). Die
+Zeile oben installiert ohne den Schritt „zum PATH hinzufügen", der Befehl
+`loomai` steht also nicht in neuen Terminals; loomAI über das Startmenü
+starten. Für den Schritt oder ein anderes Argument des Skripts die Form
+verwenden, die Argumente annimmt:
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/StefanBartl/loomAI/releases/download/latest/install.ps1))) -InstallArgs '/TASKS=addtopath'
+```
+
+Als Datei gespeichert startet man das Skript mit `powershell -ExecutionPolicy
+Bypass -File .\install.ps1 -InstallArgs '/TASKS=addtopath'` (ein Wert je
+`-File`-Kommandozeile: eine Liste käme als ein String an; in einer
+PowerShell-Sitzung ist `-InstallArgs 'a','b'` in Ordnung). `-File <setup.exe>`
+installiert ein vorhandenes Setup; dessen Prüfsumme kommt dann aus `-Sums`,
+`-Sha256` oder einer `SHA256SUMS` daneben. Zum Reparieren oder Aktualisieren
+das Skript erneut ausführen (loomAI vorher beenden, falls es läuft). Die
+Skripte sind die des
 [Release-Kits](https://github.com/StefanBartl/appkit/tree/main/release-kit) von
 appkit, beim Anhängen für diese App und den Kanal gestempelt. (v0.1.0 ist
 älter und hat kein Skript.)

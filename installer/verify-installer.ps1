@@ -91,21 +91,19 @@ function Stop-InstalledServer {
         Stop-Process -Force
 }
 
-$pathBefore = Get-RawUserPath
-$entriesBefore = Get-NormalizedUserPath
-$installed = $false
-try {
+# One installation of the setup into $InstallDir: through the install script of the release-kit when there is
+# one, else by starting the setup. It throws when the installation fails.
+function Install-Setup {
     if ($InstallScript) {
-        $InstallScript = (Resolve-Path -LiteralPath $InstallScript).Path
-        Write-Host "`n==> Installing $(Split-Path -Leaf $Setup) through $InstallScript to $InstallDir"
+        $kitScript = (Resolve-Path -LiteralPath $InstallScript).Path
+        Write-Host "`n==> Installing $(Split-Path -Leaf $Setup) through $kitScript to $InstallDir"
         $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Setup).Hash
         # The script checks the hash, runs the setup silently for the current user and throws when it fails;
         # the extra arguments are the ones this check needs (the folder, the PATH task, a log). It is called
         # in this session, not through `pwsh -File`: a command line cannot carry an array, and the three
         # arguments would arrive as one string.
-        & $InstallScript -File $Setup -Sha256 $hash -Kind inno -AllowElevated `
+        & $kitScript -File $Setup -Sha256 $hash -Kind inno -AllowElevated `
             -InstallArgs @('/TASKS=addtopath', "/DIR=$InstallDir", "/LOG=$SetupLog")
-        $installed = $true
         Write-Ok 'the install script finished'
     } else {
         Write-Host "`n==> Installing $(Split-Path -Leaf $Setup) silently to $InstallDir"
@@ -114,27 +112,21 @@ try {
             "/DIR=`"$InstallDir`"", '/TASKS=addtopath', "/LOG=`"$SetupLog`""
         )
         Assert-That ($install.ExitCode -eq 0) "installer exited with code $($install.ExitCode)"
-        $installed = $true
         Write-Ok 'installer exited with 0'
     }
+}
 
-    Write-Host "`n==> Checking the installed files"
+function Assert-InstalledFiles {
     foreach ($rel in @('app\loomai.exe', 'app\dashboard\index.html', 'loomai.cmd', 'unins000.exe')) {
         Assert-That (Test-Path (Join-Path $InstallDir $rel)) "missing $rel"
     }
     Assert-That (@(Get-ChildItem (Join-Path $InstallDir 'app') -Filter *.dll).Count -gt 0) 'no runtime DLLs next to loomai.exe'
     Write-Ok 'binary, dashboard, runtime DLLs, launcher and uninstaller are in place'
+}
 
-    Write-Host "`n==> Checking the user PATH (task addtopath)"
-    $pathInstalled = Get-RawUserPath
-    $entries = @($pathInstalled -split ';' | Where-Object { $_ })
-    Assert-That (@($entries | Where-Object { $_.TrimEnd('\') -ieq $InstallDir.TrimEnd('\') }).Count -eq 1) 'install directory is not on the user PATH exactly once'
-    if ($pathBefore) {
-        Assert-That ($pathInstalled.StartsWith($pathBefore)) 'the installer changed existing user PATH entries'
-    }
-    Write-Ok 'install directory added, existing entries untouched'
-
-    Write-Host "`n==> Starting the server through the launcher (minimal PATH, foreign working directory)"
+# The server through the launcher, as a user starts it: a minimal PATH (no MinGW on it that could hide a
+# missing DLL) and a foreign working directory.
+function Start-InstalledServer {
     $savedPath = $env:Path
     $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
     try {
@@ -149,6 +141,51 @@ try {
     $dashboard = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/" -TimeoutSec 5
     Assert-That ($dashboard.StatusCode -eq 200) "dashboard answered $($dashboard.StatusCode)"
     Write-Ok 'dashboard served (the launcher started the server from the right directory)'
+}
+
+function Get-InstalledServer {
+    $exe = Join-Path $InstallDir 'app\loomai.exe'
+    return @(Get-Process loomai -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq $exe })
+}
+
+$pathBefore = Get-RawUserPath
+$entriesBefore = Get-NormalizedUserPath
+$installed = $false
+try {
+    Install-Setup
+    $installed = $true
+
+    Write-Host "`n==> Checking the installed files"
+    Assert-InstalledFiles
+
+    Write-Host "`n==> Checking the user PATH (task addtopath)"
+    $pathInstalled = Get-RawUserPath
+    $entries = @($pathInstalled -split ';' | Where-Object { $_ })
+    Assert-That (@($entries | Where-Object { $_.TrimEnd('\') -ieq $InstallDir.TrimEnd('\') }).Count -eq 1) 'install directory is not on the user PATH exactly once'
+    if ($pathBefore) {
+        Assert-That ($pathInstalled.StartsWith($pathBefore)) 'the installer changed existing user PATH entries'
+    }
+    Write-Ok 'install directory added, existing entries untouched'
+
+    Write-Host "`n==> Starting the server through the launcher (minimal PATH, foreign working directory)"
+    Start-InstalledServer
+
+    # "Run it again to update" is what the scripts tell a user, and the server is a console process that keeps
+    # its files open: the setup must not fail on it, and what is installed afterwards must be whole and start.
+    # Whether the setup closes the running server is told, not required (a user can stop it).
+    Write-Host "`n==> Installing again over the running server (an update)"
+    Assert-That ((Get-InstalledServer).Count -gt 0) 'the server is not running before the update'
+    Install-Setup
+    Start-Sleep -Seconds 2
+    if ((Get-InstalledServer).Count -gt 0) {
+        Write-Host '  [INFO] the old server is still running after the update (the setup did not close it)'
+    } else {
+        Write-Host '  [INFO] the setup closed the running server'
+    }
+    Stop-InstalledServer
+    Assert-InstalledFiles
+    Write-Host "`n==> Starting the updated copy"
+    Start-InstalledServer
 } catch {
     if (Test-Path $SetupLog) {
         Write-Host '--- installer log (tail) ---'

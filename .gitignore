@@ -73,3 +73,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Local builds of the installer and the rolling build (installer-build, rolling.yml)
+/dist/
+/out/
