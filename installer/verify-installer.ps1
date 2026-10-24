@@ -201,9 +201,25 @@ if ($installed) {
     $uninstaller = Join-Path $InstallDir 'unins000.exe'
     # The uninstaller copies itself to %TEMP% and exits at once, so -Wait does
     # not wait for the real work: poll for the result instead.
-    $null = Start-Process -FilePath $uninstaller -Wait -PassThru -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+    # No server may hold a file of the install: it was stopped above, and a killed process lets go of its
+    # files a moment later.
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    while ((Get-InstalledServer).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    $UninstallLog = Join-Path $WorkDir 'uninstall.log'
+    $null = Start-Process -FilePath $uninstaller -Wait -PassThru -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$UninstallLog`""
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while ((Test-Path (Join-Path $InstallDir 'app')) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    if (Test-Path (Join-Path $InstallDir 'app')) {
+        # What is left, and what the uninstaller says about it.
+        Write-Host '--- left in the install directory ---'
+        Get-ChildItem -LiteralPath $InstallDir -Recurse -Force | ForEach-Object { $_.FullName }
+        Write-Host '--- loomai processes ---'
+        Get-Process loomai -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id) $($_.Path)" }
+        if (Test-Path $UninstallLog) {
+            Write-Host '--- uninstaller log (tail) ---'
+            Get-Content $UninstallLog -Tail 40
+        }
+    }
     Assert-That (-not (Test-Path (Join-Path $InstallDir 'app'))) 'the uninstaller left the app directory behind'
     Assert-That (-not (Test-Path (Join-Path $InstallDir 'loomai.cmd'))) 'the uninstaller left the launcher behind'
     Write-Ok 'files removed'
