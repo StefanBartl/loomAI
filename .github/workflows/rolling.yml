@@ -1,0 +1,131 @@
+# The rolling build: after every green CI run on main, the Windows installer of exactly that commit is built,
+# proven (installed, started, uninstalled, see .github/actions/installer-build) and put on the pre-release
+# `latest`, whose files are replaced each time. It is for trying the newest state with a click, not a release:
+# no version tag, not signed. A release stays a deliberate act (release.yml, a pushed tag, a draft a person
+# opens).
+#
+#   loomai-setup-x64.exe     the installer, under a fixed name (the version inside is 0.0.<run number>)
+#   install.ps1              installs exactly this build for the current user (release-kit of appkit,
+#                            stamped for the channel `latest`)
+#   SHA256SUMS               the checksums of both
+#
+# There is no install.sh and no Linux file: loomAI is built from source there (scripts/setup.sh).
+#
+# Deciding (only the tip of main is built) and publishing (SHA256SUMS first, the words of the page last) are
+# the actions prepare and publish of appkit's release-kit, pinned by the commit of tools/release-kit.pin
+# (tools/check-release-kit-pin.py checks that they agree). The build is ours: its file goes to publish as an
+# artifact. Actions are pinned by commit; a job gets only the rights it needs.
+
+name: rolling
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+# Only the run of the TIP of main may build, and a newer tip replaces a build that is still running: the
+# pre-release must end on the newest commit. For a `workflow_run` event `github.sha` is the tip of main when
+# the run started and `head_sha` is the commit the CI run was about, so a CI run of an OLDER commit that
+# finishes late lands in a group of its own (it builds nothing, `prepare` says so) and can neither cancel the
+# build of the tip nor push the waiting build of the tip out of the queue.
+concurrency:
+  group: rolling-${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_sha == github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    # Only a green run that came from a push to main (not a pull request).
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      current: ${{ steps.prepare.outputs.current }}
+      sha: ${{ steps.prepare.outputs.sha }}
+    steps:
+      - id: prepare
+        uses: StefanBartl/appkit/release-kit/prepare@e76ee82e2484d53c18350a33e6530e8b8c33ca08 # v0.19.1
+        with:
+          sha: ${{ github.event.workflow_run.head_sha }}
+          token: ${{ github.token }}
+
+  build:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.current == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      # The install script the installer is tried through is the one that will be stamped and attached: the
+      # release-kit at the commit of tools/release-kit.pin.
+      - name: Read the pinned release-kit commit
+        id: kit
+        shell: bash
+        run: echo "commit=$(sed -n 's/^commit *= *//p' tools/release-kit.pin)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          repository: StefanBartl/appkit
+          ref: ${{ steps.kit.outputs.commit }}
+          path: .kit
+          persist-credentials: false
+
+      - uses: ./.github/actions/installer-build
+        id: installer
+        with:
+          version: 0.0.${{ github.run_number }}
+          install-script: .kit/release-kit/scripts/install.ps1
+
+      - name: Name the installer
+        shell: bash
+        env:
+          FILE: ${{ steps.installer.outputs.file }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp "$FILE" out/loomai-setup-x64.exe
+          ls -l out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rolling-windows
+          path: out/loomai-setup-x64.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  # The file, the stamped install script and the checksums go up in one job; the words of the page move last,
+  # so only then does it name this commit.
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (node24)
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: rolling-*
+          path: dist
+          merge-multiple: true
+      - uses: StefanBartl/appkit/release-kit/publish@e76ee82e2484d53c18350a33e6530e8b8c33ca08 # v0.19.1
+        with:
+          token: ${{ github.token }}
+          tag: latest
+          sha: ${{ needs.prepare.outputs.sha }}
+          files: dist
+          expect: 1
+          app: loomai
+          windows-kind: inno
+          windows-release-asset: loomai-setup-{version}-x64.exe
+          windows-rolling-asset: loomai-setup-x64.exe
+          notes-file: .github/rolling-notes.md

@@ -19,11 +19,37 @@ Apps*.
 
 Der Installer ist nicht codesigniert, Windows SmartScreen kann deshalb warnen
 ("Weitere Informationen", dann "Trotzdem ausführen"). Jedes Release enthält
-außerdem eine `.sha256`-Datei, um den Download mit `Get-FileHash` zu prüfen.
+außerdem eine `SHA256SUMS`-Datei (v0.1.0: eine `.sha256`-Datei), um den
+Download mit `Get-FileHash` zu prüfen.
 Gebaut von [`.github/workflows/release.yml`](.github/workflows/release.yml)
 aus einem gepushten Tag `vX.Y.Z` und dort vor der Freigabe durch Installieren,
 Starten und Deinstallieren geprüft. Unter Linux/macOS oder zum Selbstbauen die
 Skripte unten verwenden.
+
+**Oder per Skript installieren** -- für den aktuellen Benutzer, ohne
+Administratorrechte, und ohne dass SmartScreen etwas aufhält: Eine Datei, die
+das Skript selbst lädt, trägt keine „aus dem Internet"-Markierung. Das Skript
+prüft sie stattdessen gegen `SHA256SUMS` und führt nichts aus, was nicht passt
+(das belegt, dass die Datei vollständig und die des Releases ist, nicht, wer
+das Release gemacht hat). In der eigenen PowerShell, nicht erhöht:
+
+```powershell
+# der neueste Stand von main (die Vorabversion "latest")
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/StefanBartl/loomAI/releases/download/latest/install.ps1 | iex"
+
+# ein Release: dasselbe mit dem Tag statt latest, z. B. .../releases/download/v0.1.1/install.ps1
+```
+
+Das Skript eines Releases installiert genau dieses Release, das von `latest`
+den Rolling-Build ([`rolling.yml`](.github/workflows/rolling.yml), nach jedem
+grünen CI-Lauf auf `main` neu gebaut und durch Installieren, Starten und
+Deinstallieren geprüft, zum Ausprobieren des Neuesten). Als Datei gespeichert
+nimmt das Skript mehr an: `-InstallArgs '/TASKS=addtopath'` nimmt den Befehl
+`loomai` in den `PATH` auf, `-File <setup.exe>` installiert ein vorhandenes
+Setup. Die Skripte sind die des
+[Release-Kits](https://github.com/StefanBartl/appkit/tree/main/release-kit) von
+appkit, beim Anhängen für diese App und den Kanal gestempelt. (v0.1.0 ist
+älter und hat kein Skript.)
 
 ## Aus dem Quellcode installieren
 

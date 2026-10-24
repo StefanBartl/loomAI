@@ -17,12 +17,37 @@ Start it from the Start menu or with `loomai`; it serves the dashboard on
 `http://127.0.0.1:8080/`. Uninstall via *Settings -> Apps*.
 
 The installer is not code-signed, so Windows SmartScreen may warn ("More info",
-then "Run anyway"). Each release also carries a `.sha256` file to check the
-download against `Get-FileHash`. Built by
+then "Run anyway"). Each release also carries a `SHA256SUMS` file (v0.1.0: a
+`.sha256` file) to check the download against `Get-FileHash`. Built by
 [`.github/workflows/release.yml`](.github/workflows/release.yml) from a pushed
 `vX.Y.Z` tag, and verified there by installing, starting and uninstalling it
 before it is offered. On Linux/macOS, or to build it yourself, use the scripts
 below.
+
+**Or install it with a script** -- for the current user, no administrator
+rights, and nothing for SmartScreen to stop: a file the script downloads
+carries no "from the internet" mark, so the script checks it against
+`SHA256SUMS` instead and runs nothing that does not match (that proves the
+file is whole and the release's own, not who made the release). In your own
+PowerShell, not elevated:
+
+```powershell
+# the newest state of main (the pre-release "latest")
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/StefanBartl/loomAI/releases/download/latest/install.ps1 | iex"
+
+# a release: the same with the tag in place of latest, e.g. .../releases/download/v0.1.1/install.ps1
+```
+
+The script of a release installs exactly that release, the script of `latest`
+the rolling build ([`rolling.yml`](.github/workflows/rolling.yml), rebuilt
+after every green CI run on `main` and proven by installing, starting and
+uninstalling it, for trying what is new). Saved as a file, the script takes
+more: `-InstallArgs '/TASKS=addtopath'` puts the `loomai` command on your
+`PATH`, `-File <setup.exe>` installs a setup you already have. The scripts are
+the ones of appkit's
+[release-kit](https://github.com/StefanBartl/appkit/tree/main/release-kit),
+stamped for this app and the channel when they are attached. (v0.1.0 predates
+them and has no script.)
 
 ## Installing from source
 

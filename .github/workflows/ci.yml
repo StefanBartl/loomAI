@@ -4,7 +4,8 @@
 #             into a throw-away prefix and smoke-tests the installed copy against GET /health; then the unit
 #             tests (ctest) and the API tests (Node), which start the real binary on a free port.
 #   linux     the same with scripts/setup.sh.
-#   hygiene   no control or invisible character in a tracked text file (tools/check-control-chars.py).
+#   hygiene   no control or invisible character in a tracked text file (tools/check-control-chars.py), and the
+#             release-kit actions of the other workflows are the pinned commit (tools/check-release-kit-pin.py).
 #
 # The rolling build (rolling.yml) starts after a green run of this workflow on main, so what it publishes
 # has passed all of it. Actions are pinned by commit, the tag is in the comment; a job gets only the rights
@@ -100,3 +101,6 @@ jobs:
       # override in source) is refused; the tool tests itself.
       - run: python3 -m unittest discover -s tools -p "test_*.py"
       - run: python3 tools/check-control-chars.py
+      # The release-kit actions of rolling.yml and release.yml are the commit of tools/release-kit.pin, and
+      # that tag still names it.
+      - run: python3 tools/check-release-kit-pin.py

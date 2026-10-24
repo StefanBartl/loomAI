@@ -4,7 +4,8 @@
     uninstalls it again.
 
 .DESCRIPTION
-    Used by .github/workflows/release.yml so that a release is only offered
+    Used by .github/workflows/release.yml and rolling.yml (through the action
+    .github/actions/installer-build) so that a release is only offered
     after the installer itself has been proven: files in place, user PATH entry
     added (and its other entries untouched), the launcher starts the server,
     GET /health answers with a minimal PATH (so no MinGW on PATH can hide a
@@ -20,6 +21,11 @@
 .PARAMETER WorkDir
     Scratch directory the installer installs into. Default: $env:RUNNER_TEMP\verify-install.
 
+.PARAMETER InstallScript
+    Path of the install.ps1 of appkit's release-kit. With it the setup is installed the way a user installs a
+    release: through that script (-File, -Sha256 of the setup, -Kind inno, -AllowElevated because a runner is
+    elevated), which runs it silently. Without it the setup is started directly.
+
 .PARAMETER Force
     Run outside CI.
 #>
@@ -27,6 +33,7 @@
 param(
     [Parameter(Mandatory)][string]$Setup,
     [string]$WorkDir = (Join-Path $env:RUNNER_TEMP 'verify-install'),
+    [string]$InstallScript = '',
     [switch]$Force
 )
 
@@ -88,14 +95,27 @@ $pathBefore = Get-RawUserPath
 $entriesBefore = Get-NormalizedUserPath
 $installed = $false
 try {
-    Write-Host "`n==> Installing $(Split-Path -Leaf $Setup) silently to $InstallDir"
-    $install = Start-Process -FilePath $Setup -Wait -PassThru -ArgumentList @(
-        '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
-        "/DIR=`"$InstallDir`"", '/TASKS=addtopath', "/LOG=`"$SetupLog`""
-    )
-    Assert-That ($install.ExitCode -eq 0) "installer exited with code $($install.ExitCode)"
-    $installed = $true
-    Write-Ok 'installer exited with 0'
+    if ($InstallScript) {
+        $InstallScript = (Resolve-Path -LiteralPath $InstallScript).Path
+        Write-Host "`n==> Installing $(Split-Path -Leaf $Setup) through $InstallScript to $InstallDir"
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Setup).Hash
+        # The script checks the hash, runs the setup silently for the current user and fails on its exit code;
+        # the extra arguments are the ones this check needs (the folder, the PATH task, a log).
+        & pwsh -NoProfile -File $InstallScript -File $Setup -Sha256 $hash -Kind inno -AllowElevated `
+            -InstallArgs '/TASKS=addtopath', "/DIR=$InstallDir", "/LOG=$SetupLog"
+        Assert-That ($LASTEXITCODE -eq 0) "the install script exited with code $LASTEXITCODE"
+        $installed = $true
+        Write-Ok 'the install script exited with 0'
+    } else {
+        Write-Host "`n==> Installing $(Split-Path -Leaf $Setup) silently to $InstallDir"
+        $install = Start-Process -FilePath $Setup -Wait -PassThru -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
+            "/DIR=`"$InstallDir`"", '/TASKS=addtopath', "/LOG=`"$SetupLog`""
+        )
+        Assert-That ($install.ExitCode -eq 0) "installer exited with code $($install.ExitCode)"
+        $installed = $true
+        Write-Ok 'installer exited with 0'
+    }
 
     Write-Host "`n==> Checking the installed files"
     foreach ($rel in @('app\loomai.exe', 'app\dashboard\index.html', 'loomai.cmd', 'unins000.exe')) {

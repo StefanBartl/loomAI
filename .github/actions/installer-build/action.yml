@@ -1,0 +1,88 @@
+# Build the Windows installer of loomAI and prove it, for release.yml and rolling.yml alike (so the two cannot
+# drift apart).
+#
+# What "prove" means: scripts/setup.ps1 builds and stages the app and smoke tests it, Inno Setup packs that
+# stage, and installer/verify-installer.ps1 installs the result silently on the runner, starts it through the
+# launcher with a minimal PATH, checks GET /health and the dashboard, uninstalls and checks that the user PATH
+# is back as it was. With `install-script` it installs through that script (the install.ps1 of appkit's
+# release-kit, the one a user runs) instead of calling the setup directly, so the way to the workstation is
+# tried as well. Only then is anything offered.
+#
+# Output `file`: the installer, dist/loomai-setup-<version>-x64.exe. The caller names it and uploads it.
+#
+# A dedicated MSYS2/MinGW-w64 toolchain: the runner image already has several g++ on PATH (Strawberry Perl,
+# C:\mingw64), none with OpenSSL. setup.ps1 is pointed at this one with -Msys2Root, which wins over PATH.
+
+name: build the installer
+description: Build loomai-setup-<version>-x64.exe with MSYS2 and Inno Setup, install it silently, check it, uninstall it.
+
+inputs:
+  version:
+    description: The version of the installer, numeric (X.Y.Z); Inno Setup needs a number.
+    required: true
+  install-script:
+    description: Path of the install.ps1 of the release-kit to install through; empty to run the setup directly.
+    required: false
+    default: ""
+
+outputs:
+  file:
+    description: The installer, relative to the workspace.
+    value: ${{ steps.pack.outputs.file }}
+
+runs:
+  using: composite
+  steps:
+    - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+      id: msys2
+      with:
+        msystem: MINGW64
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-openssl
+
+    # The same script a developer runs by hand: checks, vendors the pinned headers, builds, installs into a
+    # staging prefix, smoke-tests it.
+    - name: build and stage with scripts/setup.ps1
+      shell: pwsh
+      env:
+        MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
+      run: |
+        .\scripts\setup.ps1 -Msys2Root $env:MSYS2_ROOT -Prefix "$env:RUNNER_TEMP\stage" -BuildType Release
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    - name: make sure Inno Setup is installed
+      shell: pwsh
+      run: |
+        $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+        if (-not (Test-Path $iscc)) {
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed ($LASTEXITCODE)" }
+        }
+        if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+        "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+    - name: build the installer
+      id: pack
+      shell: pwsh
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        if ($env:VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "the version '$env:VERSION' is not numeric X.Y.Z" }
+        New-Item -ItemType Directory -Force -Path dist | Out-Null
+        & $env:ISCC /Q "/DAppVersion=$env:VERSION" "/DStageDir=$env:RUNNER_TEMP\stage" "/O$PWD\dist" installer\loomai.iss
+        if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+        $setup = Get-Item "dist\loomai-setup-$env:VERSION-x64.exe"
+        Get-ChildItem dist | Format-Table Name, Length
+        "file=dist/$($setup.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+    - name: verify the installer (install, run, uninstall)
+      shell: pwsh
+      env:
+        SETUP: ${{ steps.pack.outputs.file }}
+        INSTALL_SCRIPT: ${{ inputs.install-script }}
+      run: |
+        if ($env:INSTALL_SCRIPT) {
+          .\installer\verify-installer.ps1 -Setup $env:SETUP -InstallScript $env:INSTALL_SCRIPT
+        } else {
+          .\installer\verify-installer.ps1 -Setup $env:SETUP
+        }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
