@@ -99,13 +99,14 @@ try {
         $InstallScript = (Resolve-Path -LiteralPath $InstallScript).Path
         Write-Host "`n==> Installing $(Split-Path -Leaf $Setup) through $InstallScript to $InstallDir"
         $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Setup).Hash
-        # The script checks the hash, runs the setup silently for the current user and fails on its exit code;
-        # the extra arguments are the ones this check needs (the folder, the PATH task, a log).
-        & pwsh -NoProfile -File $InstallScript -File $Setup -Sha256 $hash -Kind inno -AllowElevated `
-            -InstallArgs '/TASKS=addtopath', "/DIR=$InstallDir", "/LOG=$SetupLog"
-        Assert-That ($LASTEXITCODE -eq 0) "the install script exited with code $LASTEXITCODE"
+        # The script checks the hash, runs the setup silently for the current user and throws when it fails;
+        # the extra arguments are the ones this check needs (the folder, the PATH task, a log). It is called
+        # in this session, not through `pwsh -File`: a command line cannot carry an array, and the three
+        # arguments would arrive as one string.
+        & $InstallScript -File $Setup -Sha256 $hash -Kind inno -AllowElevated `
+            -InstallArgs @('/TASKS=addtopath', "/DIR=$InstallDir", "/LOG=$SetupLog")
         $installed = $true
-        Write-Ok 'the install script exited with 0'
+        Write-Ok 'the install script finished'
     } else {
         Write-Host "`n==> Installing $(Split-Path -Leaf $Setup) silently to $InstallDir"
         $install = Start-Process -FilePath $Setup -Wait -PassThru -ArgumentList @(
